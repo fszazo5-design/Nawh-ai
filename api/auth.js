@@ -12,7 +12,7 @@ const corsHeaders = {
 // Simple hash function
 async function hashPassword(password) {
   const encoder = new TextEncoder();
-  const data = encoder.encode(password + process.env.AUTH_SECRET || 'nawh-secret-key');
+  const data = encoder.encode(password + (process.env.AUTH_SECRET || 'nawh-secret-key'));
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
@@ -52,9 +52,20 @@ async function handleAllRequests(req) {
   const action = url.searchParams.get('action') || 'me';
 
   try {
+    // قراءة الـ body بأمان ودعم كل الحالات المتوقعة من الفرونت-إند
+    let body = {};
+    if (req.method === 'POST' || req.method === 'PUT') {
+      try {
+        // محاولة قراءة النص أولاً وتحويله لـ JSON لتجنب تجمد الدالة
+        const text = await req.text();
+        body = text ? JSON.parse(text) : {};
+      } catch (e) {
+        console.error("Error parsing request body:", e);
+      }
+    }
+
     // Register
     if (req.method === 'POST' && action === 'register') {
-      const body = await req.json();
       const { email, password, full_name } = body;
 
       if (!email || !password) {
@@ -65,11 +76,13 @@ async function handleAllRequests(req) {
         return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
       }
 
+      // Check if user exists
       const existingUsers = await sql`SELECT id FROM users WHERE email = ${email}`;
       if (existingUsers.length > 0) {
         return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل' }, 400);
       }
 
+      // Create user
       const passwordHash = await hashPassword(password);
       const result = await sql`
         INSERT INTO users (email, password_hash, full_name, role, is_active)
@@ -89,7 +102,6 @@ async function handleAllRequests(req) {
 
     // Login
     if (req.method === 'POST' && action === 'login') {
-      const body = await req.json();
       const { email, password } = body;
 
       if (!email || !password) {
@@ -165,7 +177,6 @@ async function handleAllRequests(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح' }, 401);
       }
 
-      const body = await req.json();
       const { full_name } = body;
 
       await sql`
@@ -186,7 +197,6 @@ async function handleAllRequests(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح' }, 401);
       }
 
-      const body = await req.json();
       const { current_password, new_password } = body;
 
       if (!current_password || !new_password) {
@@ -235,7 +245,6 @@ async function handleAllRequests(req) {
   }
 }
 
-// تصدير الدوال بحسب الطرق المدعومة في نظام Vercel Web Fetch الجديد
 export async function GET(req) { return await handleAllRequests(req); }
 export async function POST(req) { return await handleAllRequests(req); }
 export async function PUT(req) { return await handleAllRequests(req); }
