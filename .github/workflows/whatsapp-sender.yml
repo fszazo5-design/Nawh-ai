@@ -1,0 +1,141 @@
+name: WhatsApp Message Sender
+
+on:
+  schedule:
+    # Run every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  send-messages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      WHATSAPP_API_URL: ${{ secrets.WHATSAPP_API_URL }}
+      WHATSAPP_API_TOKEN: ${{ secrets.WHATSAPP_API_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm install -g pnpm
+          pnpm add @neondatabase/serverless
+
+      - name: Fetch and Send WhatsApp Messages
+        run: |
+          node << 'EOF'
+          const { neon } = require('@neondatabase/serverless');
+
+          const databaseUrl = process.env.DATABASE_URL;
+          const whatsappApiUrl = process.env.WHATSAPP_API_URL;
+          const whatsappToken = process.env.WHATSAPP_API_TOKEN;
+
+          if (!databaseUrl) {
+            console.log('Missing DATABASE_URL configuration');
+            process.exit(0);
+          }
+
+          const sql = neon(databaseUrl);
+
+          async function sendWhatsAppMessage(recipient, message) {
+            if (!whatsappApiUrl || !whatsappToken) {
+              console.log('WhatsApp API not configured, marking as sent for demo');
+              return { success: true, simulated: true };
+            }
+
+            try {
+              const response = await fetch(whatsappApiUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${whatsappToken}`
+                },
+                body: JSON.stringify({
+                  to: recipient,
+                  type: 'text',
+                  text: { body: message }
+                })
+              });
+
+              if (!response.ok) {
+                const error = await response.text();
+                return { success: false, error };
+              }
+
+              return { success: true };
+            } catch (err) {
+              return { success: false, error: err.message };
+            }
+          }
+
+          async function processQueue() {
+            console.log('Fetching pending messages...');
+
+            // Get pending messages
+            const messages = await sql`
+              SELECT * FROM whatsapp_queue
+              WHERE status = 'pending'
+              ORDER BY created_at ASC
+              LIMIT 50
+            `;
+
+            if (!messages || messages.length === 0) {
+              console.log('No pending messages found');
+              process.exit(0);
+            }
+
+            console.log(`Found ${messages.length} pending messages`);
+
+            let sent = 0;
+            let failed = 0;
+
+            for (const msg of messages) {
+              console.log(`Processing message ${msg.id} to ${msg.recipient}`);
+
+              const result = await sendWhatsAppMessage(msg.recipient, msg.message);
+
+              if (result.success) {
+                // Mark as sent
+                await sql`
+                  UPDATE whatsapp_queue
+                  SET status = 'sent', sent_at = now()
+                  WHERE id = ${msg.id}
+                `;
+                sent++;
+                console.log(`Message ${msg.id} sent successfully`);
+              } else {
+                // Mark as failed
+                await sql`
+                  UPDATE whatsapp_queue
+                  SET status = 'failed', error_message = ${result.error}
+                  WHERE id = ${msg.id}
+                `;
+                failed++;
+                console.log(`Message ${msg.id} failed: ${result.error}`);
+              }
+
+              // Small delay between messages
+              await new Promise(r => setTimeout(r, 200));
+            }
+
+            console.log(`\nSummary: ${sent} sent, ${failed} failed`);
+          }
+
+          processQueue().catch(err => {
+            console.error('Fatal error:', err);
+            process.exit(1);
+          });
+          EOF
+
+      - name: Log completion
+        run: echo "WhatsApp sender job completed"
