@@ -1,3 +1,5 @@
+import { CapacitorHttp } from '@capacitor/core';
+
 /**
  * Neon Database Service
  * Centralized service for all database operations via API
@@ -32,24 +34,28 @@ const createResponse = (success, data = null, error = null, message = '') => ({
 async function request(endpoint, options = {}) {
   const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
 
-  const config = {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...options.headers
-    }
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token && { Authorization: `Bearer ${token}` }),
+    ...options.headers
   };
 
   try {
-    const response = await fetch(`${API_BASE}${endpoint}`, config);
-    const result = await response.json();
+    // استخدام CapacitorHttp لدعم الاتصال الخارجي وتفادي مشاكل CORS في الأندرويد
+    const response = await CapacitorHttp.request({
+      url: `${API_BASE}${endpoint}`,
+      method: options.method || 'GET',
+      headers: headers,
+      data: options.body ? JSON.parse(options.body) : undefined
+    });
 
-    if (!response.ok) {
-      return createResponse(false, null, result.error || 'HTTP_ERROR', result.message || 'حدث خطأ في الاتصال');
+    const result = response.data;
+
+    if (response.status < 200 || response.status >= 300) {
+      return createResponse(false, null, result?.error || 'HTTP_ERROR', result?.message || 'حدث خطأ في الاتصال');
     }
 
-    return createResponse(true, result.data, null, result.message);
+    return createResponse(true, result?.data, null, result?.message);
   } catch (err) {
     // Network error - queue for offline sync
     if (!navigator.onLine && options.method !== 'GET') {
@@ -86,16 +92,17 @@ export async function processOfflineQueue() {
 
   for (const item of queue) {
     try {
-      const response = await fetch(`${API_BASE}${item.endpoint}`, {
+      const response = await CapacitorHttp.request({
+        url: `${API_BASE}${item.endpoint}`,
         method: item.method,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${localStorage.getItem(STORAGE_KEYS.TOKEN)}`
         },
-        body: item.body
+        data: item.body ? JSON.parse(item.body) : undefined
       });
 
-      if (!response.ok) {
+      if (response.status < 200 || response.status >= 300) {
         failed.push(item);
       }
     } catch {
