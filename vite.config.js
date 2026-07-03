@@ -1,8 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(), 
+    tailwindcss() // تم إضافة الإضافة هنا للعمل مع v4
+  ],
   build: {
     outDir: 'dist',
     chunkSizeWarningLimit: 1000,
