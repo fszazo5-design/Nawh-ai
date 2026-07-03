@@ -1,21 +1,43 @@
-import { neon } from '@neondatabase/serverless';
+import pg from 'pg';
+const { Pool } = pg;
 
 /**
  * Database connection helper for Vercel Serverless Functions
- * Uses Neon serverless PostgreSQL
+ * Uses Postgres (pg) pool compatible with Neon serverless
  */
 
-let sql = null;
+let pool = null;
 
 export function getDb() {
-  if (!sql) {
+  if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new Error('DATABASE_URL environment variable is not set');
     }
-    sql = neon(connectionString);
+    
+    pool = new Pool({
+      connectionString,
+      ssl: {
+        rejectUnauthorized: false // مطلوب لتأمين الاتصال بـ Neon
+      }
+    });
   }
-  return sql;
+  
+  // دالة مخصصة لتحويل الـ Tagged Template Literals إلى صيغة متوافقة مع مكتبة pg
+  return async function sql(strings, ...values) {
+    let query = strings[0];
+    for (let i = 1; i < strings.length; i++) {
+      query += `$${i}` + strings[i];
+    }
+    
+    try {
+      const result = await pool.query(query, values);
+      return result.rows;
+    } catch (error) {
+      console.error('Database Query Error:', error);
+      throw error;
+    }
+  };
 }
 
 /**
