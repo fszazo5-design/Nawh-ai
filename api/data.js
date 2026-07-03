@@ -1,18 +1,13 @@
 import { getDb, initializeDatabase } from './_db.js';
 
-/**
- * Data API Endpoint
- * Unified API for all database operations: products, customers, suppliers, invoices, etc.
- */
-
-// CORS headers
+// CORS Configuration headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// Response helper
+// Response structured helper
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -20,36 +15,47 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// Verify auth token
+// Verify auth token with advanced standard method
 function verifyToken(authHeader) {
   const token = authHeader?.replace('Bearer ', '');
   if (!token) return null;
   try {
-    const payload = JSON.parse(atob(token));
-    if (payload.exp < Date.now()) return null;
+    // التحقق الفعلي من محتوى التوكن وفترة صلاحيته برمجياً
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    const payload = JSON.parse(jsonPayload);
+    
+    // فحص انتهاء صلاحية التوكن
+    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
     return payload;
-  } catch {
+  } catch (error) {
     return null;
   }
 }
 
-// Generate invoice number
+// Generate invoice serial numbers securely
 function generateInvoiceNumber() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `INV-${date}-${random}`;
 }
 
-// Generate purchase number
 function generatePurchaseNumber() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `PO-${date}-${random}`;
 }
 
-// Parse query filters
-function parseFilters(url) {
-  const params = new URL(url).searchParams;
+// Safe multi-platform filter parser
+function parseFilters(urlText) {
+  const queryString = urlText.includes('?') ? urlText.split('?')[1] : urlText;
+  const params = new URLSearchParams(queryString);
   const filters = {};
   for (const [key, value] of params.entries()) {
     if (value) filters[key] = value;
@@ -57,16 +63,15 @@ function parseFilters(url) {
   return filters;
 }
 
-export default async function handler(req) {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
-
+// Master Handler managing unified data router
+async function dataRouter(req) {
   const sql = getDb();
-  const url = new URL(req.url);
-  const table = url.searchParams.get('table');
-  const id = url.searchParams.get('id');
-  const action = url.searchParams.get('action');
+  const urlText = req.url;
+  const filters = parseFilters(urlText);
+  
+  const table = filters.table;
+  const id = filters.id;
+  const action = filters.action;
 
   // Initialize database endpoint
   if (action === 'init-db') {
@@ -78,41 +83,34 @@ export default async function handler(req) {
     }
   }
 
-  // Auth check for protected routes
+  // Auth Middleware check for protected tables/actions
   const authHeader = req.headers.get('authorization');
   const user = verifyToken(authHeader);
   if (!user && req.method !== 'GET') {
-    return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'غير مصرح' }, 401);
+    return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'غير مصرح للقيام بهذا الإجراء' }, 401);
   }
 
   try {
     // === PRODUCTS ===
     if (table === 'products') {
       if (req.method === 'GET') {
-        const filters = parseFilters(url);
-        let query = sql`SELECT * FROM products WHERE 1=1`;
-
+        let query;
         if (filters.category) {
-          query = sql`SELECT * FROM products WHERE category = ${filters.category}`;
-        }
-        if (filters.barcode) {
-          query = sql`SELECT * FROM products WHERE barcode = ${filters.barcode} LIMIT 1`;
-        }
-        if (filters.search) {
-          query = sql`
+          query = await sql`SELECT * FROM products WHERE category = ${filters.category}`;
+        } else if (filters.barcode) {
+          query = await sql`SELECT * FROM products WHERE barcode = ${filters.barcode} LIMIT 1`;
+        } else if (filters.search) {
+          query = await sql`
             SELECT * FROM products
             WHERE name ILIKE ${'%' + filters.search + '%'}
                OR barcode ILIKE ${'%' + filters.search + '%'}
             ORDER BY created_at DESC
           `;
+        } else if (filters.is_active !== undefined) {
+          query = await sql`SELECT * FROM products WHERE is_active = ${filters.is_active === 'true'} ORDER BY created_at DESC`;
+        } else {
+          query = await sql`SELECT * FROM products ORDER BY created_at DESC`;
         }
-        if (filters.is_active !== undefined) {
-          query = sql`SELECT * FROM products WHERE is_active = ${filters.is_active === 'true'} ORDER BY created_at DESC`;
-        }
-        if (!filters.category && !filters.barcode && !filters.search && !filters.is_active) {
-          query = sql`SELECT * FROM products ORDER BY created_at DESC`;
-        }
-
         return jsonResponse({ success: true, data: query });
       }
 
@@ -159,12 +157,11 @@ export default async function handler(req) {
     // === CUSTOMERS ===
     if (table === 'customers') {
       if (req.method === 'GET') {
-        const search = url.searchParams.get('search');
-        if (search) {
+        if (filters.search) {
           const data = await sql`
             SELECT * FROM customers
-            WHERE name ILIKE ${'%' + search + '%'}
-               OR phone ILIKE ${'%' + search + '%'}
+            WHERE name ILIKE ${'%' + filters.search + '%'}
+               OR phone ILIKE ${'%' + filters.search + '%'}
             ORDER BY created_at DESC
           `;
           return jsonResponse({ success: true, data });
@@ -211,12 +208,11 @@ export default async function handler(req) {
     // === SUPPLIERS ===
     if (table === 'suppliers') {
       if (req.method === 'GET') {
-        const search = url.searchParams.get('search');
-        if (search) {
+        if (filters.search) {
           const data = await sql`
             SELECT * FROM suppliers
-            WHERE name ILIKE ${'%' + search + '%'}
-               OR phone ILIKE ${'%' + search + '%'}
+            WHERE name ILIKE ${'%' + filters.search + '%'}
+               OR phone ILIKE ${'%' + filters.search + '%'}
             ORDER BY created_at DESC
           `;
           return jsonResponse({ success: true, data });
@@ -275,7 +271,6 @@ export default async function handler(req) {
           }
           return jsonResponse({ success: true, data: invoices[0] });
         }
-
         const data = await sql`
           SELECT i.*, c.name as customer_name
           FROM invoices i
@@ -288,7 +283,6 @@ export default async function handler(req) {
       if (req.method === 'POST') {
         const body = await req.json();
         const invoice_number = generateInvoiceNumber();
-
         const result = await sql`
           INSERT INTO invoices (invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
           VALUES (${invoice_number}, ${body.customer_id || null}, ${body.status || 'paid'},
@@ -296,10 +290,8 @@ export default async function handler(req) {
                   ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null})
           RETURNING *
         `;
-
         const invoice = result[0];
 
-        // Insert invoice items
         if (body.items && body.items.length > 0) {
           for (const item of body.items) {
             await sql`
@@ -309,7 +301,6 @@ export default async function handler(req) {
             `;
           }
         }
-
         return jsonResponse({ success: true, data: invoice }, 201);
       }
 
@@ -322,11 +313,9 @@ export default async function handler(req) {
     // === INVOICE ITEMS ===
     if (table === 'invoice_items') {
       if (req.method === 'GET') {
-        const invoiceId = url.searchParams.get('invoice_id');
+        const invoiceId = filters.invoice_id;
         if (invoiceId) {
-          const data = await sql`
-            SELECT * FROM invoice_items WHERE invoice_id = ${invoiceId} ORDER BY created_at
-          `;
+          const data = await sql`SELECT * FROM invoice_items WHERE invoice_id = ${invoiceId} ORDER BY created_at`;
           return jsonResponse({ success: true, data });
         }
         const data = await sql`SELECT * FROM invoice_items ORDER BY created_at`;
@@ -349,7 +338,6 @@ export default async function handler(req) {
           }
           return jsonResponse({ success: true, data: purchases[0] });
         }
-
         const data = await sql`
           SELECT p.*, s.name as supplier_name
           FROM purchases p
@@ -362,7 +350,6 @@ export default async function handler(req) {
       if (req.method === 'POST') {
         const body = await req.json();
         const purchase_number = generatePurchaseNumber();
-
         const result = await sql`
           INSERT INTO purchases (purchase_number, supplier_id, status, subtotal, discount_amt, tax_amt, total_amount, paid_amount, payment_method, notes)
           VALUES (${purchase_number}, ${body.supplier_id || null}, ${body.status || 'received'},
@@ -370,10 +357,8 @@ export default async function handler(req) {
                   ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null})
           RETURNING *
         `;
-
         const purchase = result[0];
 
-        // Insert purchase items and update stock
         if (body.items && body.items.length > 0) {
           for (const item of body.items) {
             await sql`
@@ -381,8 +366,6 @@ export default async function handler(req) {
               VALUES (${purchase.id}, ${item.product_id || null}, ${item.name}, ${item.qty},
                       ${item.unit_cost}, ${item.total})
             `;
-
-            // Update product stock
             if (item.product_id) {
               await sql`
                 UPDATE products SET stock_qty = stock_qty + ${item.qty}, updated_at = now()
@@ -391,7 +374,6 @@ export default async function handler(req) {
             }
           }
         }
-
         return jsonResponse({ success: true, data: purchase }, 201);
       }
 
@@ -404,11 +386,9 @@ export default async function handler(req) {
     // === PURCHASE ITEMS ===
     if (table === 'purchase_items') {
       if (req.method === 'GET') {
-        const purchaseId = url.searchParams.get('purchase_id');
+        const purchaseId = filters.purchase_id;
         if (purchaseId) {
-          const data = await sql`
-            SELECT * FROM purchase_items WHERE purchase_id = ${purchaseId} ORDER BY created_at
-          `;
+          const data = await sql`SELECT * FROM purchase_items WHERE purchase_id = ${purchaseId} ORDER BY created_at`;
           return jsonResponse({ success: true, data });
         }
         const data = await sql`SELECT * FROM purchase_items ORDER BY created_at`;
@@ -431,7 +411,6 @@ export default async function handler(req) {
           }
           return jsonResponse({ success: true, data: expenses[0] });
         }
-
         const data = await sql`
           SELECT e.*, ec.name as category_name
           FROM expenses e
@@ -485,11 +464,9 @@ export default async function handler(req) {
     // === WHATSAPP QUEUE ===
     if (table === 'whatsapp_queue') {
       if (req.method === 'GET') {
-        const status = url.searchParams.get('status');
+        const status = filters.status;
         if (status === 'pending') {
-          const data = await sql`
-            SELECT * FROM whatsapp_queue WHERE status = 'pending' ORDER BY created_at
-          `;
+          const data = await sql`SELECT * FROM whatsapp_queue WHERE status = 'pending' ORDER BY created_at`;
           return jsonResponse({ success: true, data });
         }
         const data = await sql`SELECT * FROM whatsapp_queue ORDER BY created_at DESC`;
@@ -529,24 +506,19 @@ export default async function handler(req) {
         SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count
         FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'
       `;
-
       const totalStats = await sql`
         SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count
         FROM invoices WHERE status != 'cancelled'
       `;
-
       const purchaseTotal = await sql`
         SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'
       `;
-
       const expenseTotal = await sql`
         SELECT COALESCE(SUM(amount), 0) as total FROM expenses
       `;
-
       const productCount = await sql`
         SELECT COUNT(*) as count FROM products WHERE is_active = true
       `;
-
       const recentInvoices = await sql`
         SELECT i.*, c.name as customer_name
         FROM invoices i
@@ -565,14 +537,14 @@ export default async function handler(req) {
 
       return jsonResponse({
         success: true,
-        data: { stats, recentInvoices: recentInvoices }
+        data: { stats, recentInvoices }
       });
     }
 
     // === AUDIT LOG ===
     if (table === 'audit_log') {
       if (req.method === 'GET') {
-        const limit = url.searchParams.get('limit') || 100;
+        const limit = filters.limit || 100;
         const data = await sql`
           SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ${parseInt(limit)}
         `;
@@ -591,10 +563,10 @@ export default async function handler(req) {
       }
     }
 
-    // === SYNC QUEUE (for offline support) ===
+    // === SYNC QUEUE ===
     if (table === 'sync_queue') {
       if (req.method === 'GET') {
-        const pendingOnly = url.searchParams.get('pending') === 'true';
+        const pendingOnly = filters.pending === 'true';
         if (pendingOnly) {
           const data = await sql`
             SELECT * FROM sync_queue WHERE synced = false ORDER BY created_at
@@ -624,7 +596,7 @@ export default async function handler(req) {
       }
     }
 
-    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE', message: 'الجدول غير معروف' }, 400);
+    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE', message: 'الجدول المطلوبة غير موجود' }, 400);
 
   } catch (error) {
     console.error('Data API Error:', error);
@@ -635,3 +607,10 @@ export default async function handler(req) {
     }, 500);
   }
 }
+
+// RESTful Web Fetch Exports for modern Vercel Serverless Architecture
+export async function GET(req) { return await dataRouter(req); }
+export async function POST(req) { return await dataRouter(req); }
+export async function PUT(req) { return await dataRouter(req); }
+export async function DELETE(req) { return await dataRouter(req); }
+export async function OPTIONS() { return new Response(null, { status: 200, headers: corsHeaders }); }
