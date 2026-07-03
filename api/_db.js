@@ -25,6 +25,13 @@ export function getDb() {
   
   // دالة تحويل الـ Tagged Template المتوافقة تماماً مع عمليات الـ INSERT والـ SELECT
   return async function sql(strings, ...values) {
+    // 💡 الحل الجذري: تشغيل دالة إنشاء الجداول والتأكد من وجودها قبل تشغيل أي استعلام
+    try {
+      await initializeDatabase();
+    } catch (initErr) {
+      console.error('Failed to auto-initialize database tables:', initErr);
+    }
+
     // 1. تحويل صيغة الـ Template النصي إلى استعلام بـParameters ($1, $2) لتفادي ثغرات الحقن
     let query = strings[0];
     for (let i = 1; i < strings.length; i++) {
@@ -49,9 +56,12 @@ export function getDb() {
  * Initialize database tables if they don't exist
  */
 export async function initializeDatabase() {
-  const sql = getDb();
+  // نستخدم pool.query مباشرة هنا لتجنب التكرار اللانهائي (Infinite Loop) مع دالة sql المخصصة
+  const runSql = async (text) => {
+    return await pool.query(text);
+  };
 
-  await sql`
+  await runSql(`
     -- Users table
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -64,9 +74,9 @@ export async function initializeDatabase() {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Products table
     CREATE TABLE IF NOT EXISTS products (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -84,9 +94,9 @@ export async function initializeDatabase() {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Customers table
     CREATE TABLE IF NOT EXISTS customers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -100,9 +110,9 @@ export async function initializeDatabase() {
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Suppliers table
     CREATE TABLE IF NOT EXISTS suppliers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -116,18 +126,18 @@ export async function initializeDatabase() {
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Expense categories table
     CREATE TABLE IF NOT EXISTS expense_categories (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL UNIQUE,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Invoices table
     CREATE TABLE IF NOT EXISTS invoices (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -144,9 +154,9 @@ export async function initializeDatabase() {
       notes TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Invoice items table
     CREATE TABLE IF NOT EXISTS invoice_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -159,9 +169,9 @@ export async function initializeDatabase() {
       total NUMERIC(12,2) NOT NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Purchases table
     CREATE TABLE IF NOT EXISTS purchases (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -177,9 +187,9 @@ export async function initializeDatabase() {
       notes TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Purchase items table
     CREATE TABLE IF NOT EXISTS purchase_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -191,9 +201,9 @@ export async function initializeDatabase() {
       total NUMERIC(12,2) NOT NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Expenses table
     CREATE TABLE IF NOT EXISTS expenses (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -205,9 +215,9 @@ export async function initializeDatabase() {
       expense_date DATE,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- WhatsApp queue table
     CREATE TABLE IF NOT EXISTS whatsapp_queue (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -221,9 +231,9 @@ export async function initializeDatabase() {
       created_by UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Audit log table
     CREATE TABLE IF NOT EXISTS audit_log (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -237,9 +247,9 @@ export async function initializeDatabase() {
       user_agent TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await runSql(`
     -- Sync queue table for offline mobile sync
     CREATE TABLE IF NOT EXISTS sync_queue (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -252,19 +262,19 @@ export async function initializeDatabase() {
       synced_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
   // Create indexes
-  await sql`CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_invoices_created ON invoices(created_at DESC)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_whatsapp_status ON whatsapp_queue(status)`;
+  await runSql(`CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)`);
+  await runSql(`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)`);
+  await runSql(`CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id)`);
+  await runSql(`CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)`);
+  await runSql(`CREATE INDEX IF NOT EXISTS idx_invoices_created ON invoices(created_at DESC)`);
+  await runSql(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+  await runSql(`CREATE INDEX IF NOT EXISTS idx_whatsapp_status ON whatsapp_queue(status)`);
 
   // Insert default expense categories if not exist
-  await sql`
+  await runSql(`
     INSERT INTO expense_categories (name)
     VALUES
       ('رواتب'),
@@ -276,7 +286,7 @@ export async function initializeDatabase() {
       ('تسويق'),
       ('أخرى')
     ON CONFLICT (name) DO NOTHING
-  `;
+  `);
 
   return { success: true, message: 'Database initialized successfully' };
 }
