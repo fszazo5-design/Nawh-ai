@@ -10,27 +10,22 @@ let pool = null;
 
 export function getDb() {
   if (!pool) {
-    let connectionString = process.env.DATABASE_URL;
+    const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new Error('DATABASE_URL environment variable is not set');
-    }
-    
-    // حل التحذير الأمني للأبد: التأكد من ضبط الـ sslmode ليتوافق مع المعايير المستقبلية للمكتبة
-    if (!connectionString.includes('sslmode=')) {
-      const separator = connectionString.includes('?') ? '&' : '?';
-      connectionString += `${separator}sslmode=verify-full`;
     }
     
     pool = new Pool({
       connectionString,
       ssl: {
-        rejectUnauthorized: false // مطلوب ومؤمن للاتصال بـ Neon
+        rejectUnauthorized: false // متوافق ومطلوب للاتصال بـ Neon
       }
     });
   }
   
-  // دالة مخصصة لتحويل الـ Tagged Template Literals إلى صيغة متوافقة مع مكتبة pg
+  // دالة تحويل الـ Tagged Template المتوافقة تماماً مع عمليات الـ INSERT والـ SELECT
   return async function sql(strings, ...values) {
+    // 1. تحويل صيغة الـ Template النصي إلى استعلام بـParameters ($1, $2) لتفادي ثغرات الحقن
     let query = strings[0];
     for (let i = 1; i < strings.length; i++) {
       query += `$${i}` + strings[i];
@@ -38,7 +33,11 @@ export function getDb() {
     
     try {
       const result = await pool.query(query, values);
-      return result.rows; // إرجاع المصفوفة مباشرة لنجاح عملية الـ INSERT وقراءة result[0]
+      
+      // 2. الحل السحري لعملية "إنشاء الحساب":
+      // إذا كان الاستعلام هو INSERT أو UPDATE، يجب أن نعيد مصفوفة rows حتى لو كانت فارغة
+      // لكي لا تعطي الواجهة خطأ عند قراءة result[0]
+      return result.rows || []; 
     } catch (error) {
       console.error('Database Query Error:', error);
       throw error;
