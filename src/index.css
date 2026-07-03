@@ -1,4 +1,7 @@
-@import "tailwindcss";
+/* استبدلنا السطر الأول بالتوجيهات الرسمية لـ v3 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 @layer base {
   :root {
