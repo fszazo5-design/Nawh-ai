@@ -6,9 +6,6 @@ import { CapacitorHttp } from '@capacitor/core';
  * Supports offline persistence for Android WebView compatibility
  */
 
-// API Base URL
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
-
 // Local Storage Keys
 const STORAGE_KEYS = {
   USER: 'nawh_user',
@@ -31,7 +28,7 @@ const createResponse = (success, data = null, error = null, message = '') => ({
 // ============================================
 // HTTP Request Helper
 // ============================================
-async function request(endpoint, options = {}) {
+async function request(fullUrl, options = {}) {
   const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
 
   const headers = {
@@ -41,9 +38,9 @@ async function request(endpoint, options = {}) {
   };
 
   try {
-    // استخدام CapacitorHttp لدعم الاتصال الخارجي وتفادي مشاكل CORS في الأندرويد
+    // استخدام CapacitorHttp بالرابط الكامل المباشر لتفادي مشاكل CORS تماماً
     const response = await CapacitorHttp.request({
-      url: `${API_BASE}${endpoint}`,
+      url: fullUrl,
       method: options.method || 'GET',
       headers: headers,
       data: options.body ? JSON.parse(options.body) : undefined
@@ -59,7 +56,7 @@ async function request(endpoint, options = {}) {
   } catch (err) {
     // Network error - queue for offline sync
     if (!navigator.onLine && options.method !== 'GET') {
-      await queueOfflineOperation(endpoint, options);
+      await queueOfflineOperation(fullUrl, options);
       return createResponse(false, null, 'OFFLINE', 'تم حفظ العمل للتنفيذ لاحقاً');
     }
 
@@ -71,10 +68,10 @@ async function request(endpoint, options = {}) {
 // ============================================
 // Offline Support - Local Persistence
 // ============================================
-async function queueOfflineOperation(endpoint, options) {
+async function queueOfflineOperation(fullUrl, options) {
   const queue = JSON.parse(localStorage.getItem(STORAGE_KEYS.OFFLINE_QUEUE) || '[]');
   queue.push({
-    endpoint,
+    url: fullUrl,
     method: options.method,
     body: options.body,
     timestamp: Date.now()
@@ -93,7 +90,7 @@ export async function processOfflineQueue() {
   for (const item of queue) {
     try {
       const response = await CapacitorHttp.request({
-        url: `${API_BASE}${item.endpoint}`,
+        url: item.url,
         method: item.method,
         headers: {
           'Content-Type': 'application/json',
@@ -138,7 +135,7 @@ function getCachedData(key) {
 // ============================================
 export const auth = {
   async register({ email, password, full_name }) {
-    const result = await request('/auth?action=register', {
+    const result = await request('https://nawh-ai.vercel.app/api/auth?action=register', {
       method: 'POST',
       body: JSON.stringify({ email, password, full_name })
     });
@@ -152,7 +149,7 @@ export const auth = {
   },
 
   async login({ email, password }) {
-    const result = await request('/auth?action=login', {
+    const result = await request('https://nawh-ai.vercel.app/api/auth?action=login', {
       method: 'POST',
       body: JSON.stringify({ email, password })
     });
@@ -172,7 +169,7 @@ export const auth = {
   },
 
   async getCurrentUser() {
-    const result = await request('/auth?action=me');
+    const result = await request('https://nawh-ai.vercel.app/api/auth?action=me');
 
     if (result.success) {
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(result.data));
@@ -182,14 +179,14 @@ export const auth = {
   },
 
   async updateProfile(data) {
-    return request('/auth?action=profile', {
+    return request('https://nawh-ai.vercel.app/api/auth?action=profile', {
       method: 'PUT',
       body: JSON.stringify(data)
     });
   },
 
   async changePassword(current_password, new_password) {
-    return request('/auth?action=password', {
+    return request('https://nawh-ai.vercel.app/api/auth?action=password', {
       method: 'PUT',
       body: JSON.stringify({ current_password, new_password })
     });
@@ -225,17 +222,15 @@ export const auth = {
 // ============================================
 export const products = {
   async getAll(filters = {}) {
-    const params = new URLSearchParams();
-    params.set('table', 'products');
+    let url = 'https://nawh-ai.vercel.app/api/data?table=products';
 
-    if (filters.category) params.set('category', filters.category);
-    if (filters.search) params.set('search', filters.search);
-    if (filters.is_active !== undefined) params.set('is_active', filters.is_active);
-    if (filters.barcode) params.set('barcode', filters.barcode);
+    if (filters.category) url += `&category=${encodeURIComponent(filters.category)}`;
+    if (filters.search) url += `&search=${encodeURIComponent(filters.search)}`;
+    if (filters.is_active !== undefined) url += `&is_active=${filters.is_active}`;
+    if (filters.barcode) url += `&barcode=${encodeURIComponent(filters.barcode)}`;
 
-    const result = await request(`/data?${params.toString()}`);
+    const result = await request(url);
 
-    // Cache for offline access
     if (result.success) {
       cacheData('products', result.data);
     }
@@ -244,17 +239,17 @@ export const products = {
   },
 
   async getById(id) {
-    const result = await request(`/data?table=products&id=${id}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=products&id=${id}`);
     return result.success ? result.data : null;
   },
 
   async getByBarcode(barcode) {
-    const result = await request(`/data?table=products&barcode=${barcode}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=products&barcode=${barcode}`);
     return result.success ? result.data?.[0] || null : null;
   },
 
   async create(data) {
-    const result = await request('/data?table=products', {
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=products', {
       method: 'POST',
       body: JSON.stringify(data)
     });
@@ -262,7 +257,7 @@ export const products = {
   },
 
   async update(id, data) {
-    const result = await request(`/data?table=products&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=products&id=${id}`, {
       method: 'PUT',
       body: JSON.stringify(data)
     });
@@ -270,7 +265,7 @@ export const products = {
   },
 
   async delete(id) {
-    const result = await request(`/data?table=products&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=products&id=${id}`, {
       method: 'DELETE'
     });
     return result.success;
@@ -287,11 +282,10 @@ export const products = {
 // ============================================
 export const customers = {
   async getAll(search = '') {
-    const params = new URLSearchParams();
-    params.set('table', 'customers');
-    if (search) params.set('search', search);
+    let url = 'https://nawh-ai.vercel.app/api/data?table=customers';
+    if (search) url += `&search=${encodeURIComponent(search)}`;
 
-    const result = await request(`/data?${params.toString()}`);
+    const result = await request(url);
 
     if (result.success) {
       cacheData('customers', result.data);
@@ -301,12 +295,12 @@ export const customers = {
   },
 
   async getById(id) {
-    const result = await request(`/data?table=customers&id=${id}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=customers&id=${id}`);
     return result.success ? result.data : null;
   },
 
   async create(data) {
-    const result = await request('/data?table=customers', {
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=customers', {
       method: 'POST',
       body: JSON.stringify(data)
     });
@@ -314,7 +308,7 @@ export const customers = {
   },
 
   async update(id, data) {
-    const result = await request(`/data?table=customers&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=customers&id=${id}`, {
       method: 'PUT',
       body: JSON.stringify(data)
     });
@@ -322,7 +316,7 @@ export const customers = {
   },
 
   async delete(id) {
-    const result = await request(`/data?table=customers&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=customers&id=${id}`, {
       method: 'DELETE'
     });
     return result.success;
@@ -334,11 +328,10 @@ export const customers = {
 // ============================================
 export const suppliers = {
   async getAll(search = '') {
-    const params = new URLSearchParams();
-    params.set('table', 'suppliers');
-    if (search) params.set('search', search);
+    let url = 'https://nawh-ai.vercel.app/api/data?table=suppliers';
+    if (search) url += `&search=${encodeURIComponent(search)}`;
 
-    const result = await request(`/data?${params.toString()}`);
+    const result = await request(url);
 
     if (result.success) {
       cacheData('suppliers', result.data);
@@ -348,12 +341,12 @@ export const suppliers = {
   },
 
   async getById(id) {
-    const result = await request(`/data?table=suppliers&id=${id}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=suppliers&id=${id}`);
     return result.success ? result.data : null;
   },
 
   async create(data) {
-    const result = await request('/data?table=suppliers', {
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=suppliers', {
       method: 'POST',
       body: JSON.stringify(data)
     });
@@ -361,7 +354,7 @@ export const suppliers = {
   },
 
   async update(id, data) {
-    const result = await request(`/data?table=suppliers&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=suppliers&id=${id}`, {
       method: 'PUT',
       body: JSON.stringify(data)
     });
@@ -369,7 +362,7 @@ export const suppliers = {
   },
 
   async delete(id) {
-    const result = await request(`/data?table=suppliers&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=suppliers&id=${id}`, {
       method: 'DELETE'
     });
     return result.success;
@@ -381,27 +374,25 @@ export const suppliers = {
 // ============================================
 export const invoices = {
   async getAll(filters = {}) {
-    const params = new URLSearchParams();
-    params.set('table', 'invoices');
+    let url = 'https://nawh-ai.vercel.app/api/data?table=invoices';
+    if (filters.status) url += `&status=${encodeURIComponent(filters.status)}`;
 
-    if (filters.status) params.set('status', filters.status);
-
-    const result = await request(`/data?${params.toString()}`);
+    const result = await request(url);
     return result.success ? result.data : [];
   },
 
   async getById(id) {
-    const result = await request(`/data?table=invoices&id=${id}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=invoices&id=${id}`);
     return result.success ? result.data : null;
   },
 
   async getItems(invoiceId) {
-    const result = await request(`/data?table=invoice_items&invoice_id=${invoiceId}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=invoice_items&invoice_id=${invoiceId}`);
     return result.success ? result.data : [];
   },
 
   async create(data) {
-    const result = await request('/data?table=invoices', {
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=invoices', {
       method: 'POST',
       body: JSON.stringify(data)
     });
@@ -409,7 +400,7 @@ export const invoices = {
   },
 
   async updateStatus(id, status) {
-    const result = await request(`/data?table=invoices&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=invoices&id=${id}`, {
       method: 'PUT',
       body: JSON.stringify({ status })
     });
@@ -417,7 +408,7 @@ export const invoices = {
   },
 
   async delete(id) {
-    const result = await request(`/data?table=invoices&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=invoices&id=${id}`, {
       method: 'DELETE'
     });
     return result.success;
@@ -450,27 +441,25 @@ export const invoices = {
 // ============================================
 export const purchases = {
   async getAll(filters = {}) {
-    const params = new URLSearchParams();
-    params.set('table', 'purchases');
+    let url = 'https://nawh-ai.vercel.app/api/data?table=purchases';
+    if (filters.status) url += `&status=${encodeURIComponent(filters.status)}`;
 
-    if (filters.status) params.set('status', filters.status);
-
-    const result = await request(`/data?${params.toString()}`);
+    const result = await request(url);
     return result.success ? result.data : [];
   },
 
   async getById(id) {
-    const result = await request(`/data?table=purchases&id=${id}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=purchases&id=${id}`);
     return result.success ? result.data : null;
   },
 
   async getItems(purchaseId) {
-    const result = await request(`/data?table=purchase_items&purchase_id=${purchaseId}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=purchase_items&purchase_id=${purchaseId}`);
     return result.success ? result.data : [];
   },
 
   async create(data) {
-    const result = await request('/data?table=purchases', {
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=purchases', {
       method: 'POST',
       body: JSON.stringify(data)
     });
@@ -478,7 +467,7 @@ export const purchases = {
   },
 
   async delete(id) {
-    const result = await request(`/data?table=purchases&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=purchases&id=${id}`, {
       method: 'DELETE'
     });
     return result.success;
@@ -495,20 +484,17 @@ export const purchases = {
 // ============================================
 export const expenses = {
   async getAll(filters = {}) {
-    const params = new URLSearchParams();
-    params.set('table', 'expenses');
-
-    const result = await request(`/data?${params.toString()}`);
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=expenses');
     return result.success ? result.data : [];
   },
 
   async getById(id) {
-    const result = await request(`/data?table=expenses&id=${id}`);
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=expenses&id=${id}`);
     return result.success ? result.data : null;
   },
 
   async create(data) {
-    const result = await request('/data?table=expenses', {
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=expenses', {
       method: 'POST',
       body: JSON.stringify(data)
     });
@@ -516,7 +502,7 @@ export const expenses = {
   },
 
   async update(id, data) {
-    const result = await request(`/data?table=expenses&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=expenses&id=${id}`, {
       method: 'PUT',
       body: JSON.stringify(data)
     });
@@ -524,7 +510,7 @@ export const expenses = {
   },
 
   async delete(id) {
-    const result = await request(`/data?table=expenses&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=expenses&id=${id}`, {
       method: 'DELETE'
     });
     return result.success;
@@ -536,7 +522,7 @@ export const expenses = {
   },
 
   async getCategories() {
-    const result = await request('/data?table=expense_categories');
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=expense_categories');
     return result.success ? result.data : [];
   }
 };
@@ -546,7 +532,7 @@ export const expenses = {
 // ============================================
 export const whatsapp = {
   async queueMessage(recipient, message, template = null, params = null) {
-    const result = await request('/data?table=whatsapp_queue', {
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=whatsapp_queue', {
       method: 'POST',
       body: JSON.stringify({
         recipient,
@@ -559,12 +545,12 @@ export const whatsapp = {
   },
 
   async getPending() {
-    const result = await request('/data?table=whatsapp_queue&status=pending');
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=whatsapp_queue&status=pending');
     return result.success ? result.data : [];
   },
 
   async markSent(id) {
-    const result = await request(`/data?table=whatsapp_queue&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=whatsapp_queue&id=${id}`, {
       method: 'PUT',
       body: JSON.stringify({ status: 'sent' })
     });
@@ -572,7 +558,7 @@ export const whatsapp = {
   },
 
   async markFailed(id, errorMessage) {
-    const result = await request(`/data?table=whatsapp_queue&id=${id}`, {
+    const result = await request(`https://nawh-ai.vercel.app/api/data?table=whatsapp_queue&id=${id}`, {
       method: 'PUT',
       body: JSON.stringify({ status: 'failed', error_message: errorMessage })
     });
@@ -580,13 +566,11 @@ export const whatsapp = {
   },
 
   async getQueue(filters = {}) {
-    const params = new URLSearchParams();
-    params.set('table', 'whatsapp_queue');
+    let url = 'https://nawh-ai.vercel.app/api/data?table=whatsapp_queue';
+    if (filters.status) url += `&status=${encodeURIComponent(filters.status)}`;
+    if (filters.limit) url += `&limit=${filters.limit}`;
 
-    if (filters.status) params.set('status', filters.status);
-    if (filters.limit) params.set('limit', filters.limit);
-
-    const result = await request(`/data?${params.toString()}`);
+    const result = await request(url);
     return result.success ? result.data : [];
   }
 };
@@ -596,7 +580,7 @@ export const whatsapp = {
 // ============================================
 export const audit = {
   async log(table, recordId, action, oldValues = null, newValues = null) {
-    await request('/data?table=audit_log', {
+    await request('https://nawh-ai.vercel.app/api/data?table=audit_log', {
       method: 'POST',
       body: JSON.stringify({
         table_name: table,
@@ -609,13 +593,11 @@ export const audit = {
   },
 
   async getLogs(filters = {}) {
-    const params = new URLSearchParams();
-    params.set('table', 'audit_log');
+    let url = 'https://nawh-ai.vercel.app/api/data?table=audit_log';
+    if (filters.table) url += `&table_name=${encodeURIComponent(filters.table)}`;
+    if (filters.limit) url += `&limit=${filters.limit}`;
 
-    if (filters.table) params.set('table_name', filters.table);
-    if (filters.limit) params.set('limit', filters.limit);
-
-    const result = await request(`/data?${params.toString()}`);
+    const result = await request(url);
     return result.success ? result.data : [];
   }
 };
@@ -625,7 +607,7 @@ export const audit = {
 // ============================================
 export const dashboard = {
   async getStats() {
-    const result = await request('/data?action=dashboard');
+    const result = await request('https://nawh-ai.vercel.app/api/data?action=dashboard');
 
     if (result.success) {
       return result.data.stats;
@@ -642,7 +624,7 @@ export const dashboard = {
   },
 
   async getRecentInvoices(limit = 5) {
-    const result = await request('/data?action=dashboard');
+    const result = await request('https://nawh-ai.vercel.app/api/data?action=dashboard');
 
     if (result.success) {
       return result.data.recentInvoices.slice(0, limit);
@@ -656,7 +638,7 @@ export const dashboard = {
 // Database Initialization
 // ============================================
 export async function initializeDatabase() {
-  return request('/data?action=init-db');
+  return request('https://nawh-ai.vercel.app/api/data?action=init-db');
 }
 
 // ============================================
@@ -664,12 +646,12 @@ export async function initializeDatabase() {
 // ============================================
 export const sync = {
   async getPending() {
-    const result = await request('/data?table=sync_queue&pending=true');
+    const result = await request('https://nawh-ai.vercel.app/api/data?table=sync_queue&pending=true');
     return result.success ? result.data : [];
   },
 
   async markSynced(id) {
-    await request(`/data?table=sync_queue&id=${id}`, {
+    await request(`https://nawh-ai.vercel.app/api/data?table=sync_queue&id=${id}`, {
       method: 'PUT'
     });
   },
