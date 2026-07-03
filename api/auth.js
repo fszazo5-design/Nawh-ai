@@ -58,7 +58,7 @@ export default async function handler(req) {
   }
 
   const sql = getDb();
-  const url = new URL(req.url);
+  const url = new URL(req.url, req.headers.get('host') ? `http://${req.headers.get('host')}` : 'http://localhost');
   const action = url.searchParams.get('action') || 'me';
 
   try {
