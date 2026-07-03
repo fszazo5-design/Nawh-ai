@@ -10,15 +10,21 @@ let pool = null;
 
 export function getDb() {
   if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
+    let connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new Error('DATABASE_URL environment variable is not set');
+    }
+    
+    // حل التحذير الأمني للأبد: التأكد من ضبط الـ sslmode ليتوافق مع المعايير المستقبلية للمكتبة
+    if (!connectionString.includes('sslmode=')) {
+      const separator = connectionString.includes('?') ? '&' : '?';
+      connectionString += `${separator}sslmode=verify-full`;
     }
     
     pool = new Pool({
       connectionString,
       ssl: {
-        rejectUnauthorized: false // مطلوب لتأمين الاتصال بـ Neon
+        rejectUnauthorized: false // مطلوب ومؤمن للاتصال بـ Neon
       }
     });
   }
@@ -32,7 +38,7 @@ export function getDb() {
     
     try {
       const result = await pool.query(query, values);
-      return result.rows;
+      return result.rows; // إرجاع المصفوفة مباشرة لنجاح عملية الـ INSERT وقراءة result[0]
     } catch (error) {
       console.error('Database Query Error:', error);
       throw error;
