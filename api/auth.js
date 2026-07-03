@@ -2,11 +2,6 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 import { getDb } from './_db.js';
 
-/**
- * Auth API Endpoint
- * Handles: login, register, logout, get-current-user
- */
-
 // CORS headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -14,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// Simple hash function (for production use bcrypt)
+// Simple hash function
 async function hashPassword(password) {
   const encoder = new TextEncoder();
   const data = encoder.encode(password + process.env.AUTH_SECRET || 'nawh-secret-key');
@@ -28,7 +23,6 @@ async function verifyPassword(password, hash) {
   return passwordHash === hash;
 }
 
-// Generate JWT-like token (simple version)
 function generateToken(userId, email, role) {
   const payload = { userId, email, role, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 };
   return btoa(JSON.stringify(payload));
@@ -44,7 +38,6 @@ function verifyToken(token) {
   }
 }
 
-// Response helper
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -52,16 +45,10 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-export default async function handler(req) {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
-
+// دالة المعالجة الرئيسية الموحدة لجميع الطلبات
+async function handleAllRequests(req) {
   const sql = getDb();
-  
-  // تصحيح قراءة الروابط في بيئة Node.js للسيرفرلس
-  const host = req.headers.host || 'localhost';
-  const url = new URL(req.url, `http://${host}`);
+  const url = new URL(req.url);
   const action = url.searchParams.get('action') || 'me';
 
   try {
@@ -78,13 +65,11 @@ export default async function handler(req) {
         return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
       }
 
-      // Check if user exists
       const existingUsers = await sql`SELECT id FROM users WHERE email = ${email}`;
       if (existingUsers.length > 0) {
         return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل' }, 400);
       }
 
-      // Create user
       const passwordHash = await hashPassword(password);
       const result = await sql`
         INSERT INTO users (email, password_hash, full_name, role, is_active)
@@ -111,7 +96,6 @@ export default async function handler(req) {
         return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
       }
 
-      // Find user
       const users = await sql`SELECT * FROM users WHERE email = ${email}`;
       const user = users[0];
 
@@ -123,7 +107,6 @@ export default async function handler(req) {
         return jsonResponse({ success: false, error: 'ACCOUNT_DISABLED', message: 'الحساب معطل' }, 403);
       }
 
-      // Update last login
       await sql`UPDATE users SET last_login = now() WHERE id = ${user.id}`;
 
       const token = generateToken(user.id, user.email, user.role);
@@ -145,8 +128,7 @@ export default async function handler(req) {
 
     // Get current user
     if (req.method === 'GET' && action === 'me') {
-      // تصحيح طريقة جلب الهيدر ليتوافق مع Node.js بدلاً من دالة .get()
-      const authHeader = req.headers.authorization;
+      const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
 
       if (!token) {
@@ -175,7 +157,7 @@ export default async function handler(req) {
 
     // Update profile
     if (req.method === 'PUT' && action === 'profile') {
-      const authHeader = req.headers.authorization;
+      const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
@@ -196,7 +178,7 @@ export default async function handler(req) {
 
     // Change password
     if (req.method === 'PUT' && action === 'password') {
-      const authHeader = req.headers.authorization;
+      const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
@@ -229,7 +211,7 @@ export default async function handler(req) {
 
     // List users (admin only)
     if (req.method === 'GET' && action === 'users') {
-      const authHeader = req.headers.authorization;
+      const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
@@ -252,3 +234,9 @@ export default async function handler(req) {
     return jsonResponse({ success: false, error: 'SERVER_ERROR', message: 'حدث خطأ في الخادم' }, 500);
   }
 }
+
+// تصدير الدوال بحسب الطرق المدعومة في نظام Vercel Web Fetch الجديد
+export async function GET(req) { return await handleAllRequests(req); }
+export async function POST(req) { return await handleAllRequests(req); }
+export async function PUT(req) { return await handleAllRequests(req); }
+export async function OPTIONS() { return new Response(null, { status: 200, headers: corsHeaders }); }
