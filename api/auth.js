@@ -58,7 +58,10 @@ export default async function handler(req) {
   }
 
   const sql = getDb();
-  const url = new URL(req.url, req.headers.get('host') ? `http://${req.headers.get('host')}` : 'http://localhost');
+  
+  // تصحيح قراءة الروابط في بيئة Node.js للسيرفرلس
+  const host = req.headers.host || 'localhost';
+  const url = new URL(req.url, `http://${host}`);
   const action = url.searchParams.get('action') || 'me';
 
   try {
@@ -142,7 +145,8 @@ export default async function handler(req) {
 
     // Get current user
     if (req.method === 'GET' && action === 'me') {
-      const authHeader = req.headers.get('authorization');
+      // تصحيح طريقة جلب الهيدر ليتوافق مع Node.js بدلاً من دالة .get()
+      const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
 
       if (!token) {
@@ -171,7 +175,7 @@ export default async function handler(req) {
 
     // Update profile
     if (req.method === 'PUT' && action === 'profile') {
-      const authHeader = req.headers.get('authorization');
+      const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
@@ -192,7 +196,7 @@ export default async function handler(req) {
 
     // Change password
     if (req.method === 'PUT' && action === 'password') {
-      const authHeader = req.headers.get('authorization');
+      const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
@@ -225,7 +229,7 @@ export default async function handler(req) {
 
     // List users (admin only)
     if (req.method === 'GET' && action === 'users') {
-      const authHeader = req.headers.get('authorization');
+      const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
