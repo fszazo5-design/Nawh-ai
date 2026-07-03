@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import { auth } from '../services/neonService.js'
+import { auth, processOfflineQueue } from '../services/neonService.js'
 
 const AuthContext = createContext(null)
 
@@ -15,9 +15,7 @@ export function AuthProvider({ children }) {
     // Listen for online/offline events
     const handleOnline = () => {
       // Process offline queue when back online
-      import('../services/neonService.js').then(mod => {
-        mod.processOfflineQueue()
-      })
+      processOfflineQueue()
     }
 
     window.addEventListener('online', handleOnline)
