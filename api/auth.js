@@ -1,3 +1,5 @@
+const DATABASE_URL = process.env.DATABASE_URL;
+
 import { getDb } from './_db.js';
 
 /**
