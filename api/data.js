@@ -47,9 +47,10 @@ function generatePurchaseNumber() {
   return `PO-${date}-${random}`;
 }
 
-// Parse query filters
-function parseFilters(url) {
-  const params = new URL(url).searchParams;
+// Parse query filters safely without full URL parsing explosion
+function parseFilters(urlText) {
+  const queryString = urlText.includes('?') ? urlText.split('?')[1] : urlText;
+  const params = new URLSearchParams(queryString);
   const filters = {};
   for (const [key, value] of params.entries()) {
     if (value) filters[key] = value;
@@ -63,10 +64,14 @@ export default async function handler(req) {
   }
 
   const sql = getDb();
-  const url = new URL(req.url);
-  const table = url.searchParams.get('table');
-  const id = url.searchParams.get('id');
-  const action = url.searchParams.get('action');
+  
+  // 💡 الحل الآمن: قراءة المعاملات مباشرة عبر URLSearchParams بناءً على النص القادم
+  const urlText = req.url;
+  const filters = parseFilters(urlText);
+
+  const table = filters.table;
+  const id = filters.id;
+  const action = filters.action;
 
   // Initialize database endpoint
   if (action === 'init-db') {
@@ -89,7 +94,6 @@ export default async function handler(req) {
     // === PRODUCTS ===
     if (table === 'products') {
       if (req.method === 'GET') {
-        const filters = parseFilters(url);
         let query = sql`SELECT * FROM products WHERE 1=1`;
 
         if (filters.category) {
@@ -159,7 +163,7 @@ export default async function handler(req) {
     // === CUSTOMERS ===
     if (table === 'customers') {
       if (req.method === 'GET') {
-        const search = url.searchParams.get('search');
+        const search = filters.search;
         if (search) {
           const data = await sql`
             SELECT * FROM customers
@@ -211,7 +215,7 @@ export default async function handler(req) {
     // === SUPPLIERS ===
     if (table === 'suppliers') {
       if (req.method === 'GET') {
-        const search = url.searchParams.get('search');
+        const search = filters.search;
         if (search) {
           const data = await sql`
             SELECT * FROM suppliers
@@ -322,7 +326,7 @@ export default async function handler(req) {
     // === INVOICE ITEMS ===
     if (table === 'invoice_items') {
       if (req.method === 'GET') {
-        const invoiceId = url.searchParams.get('invoice_id');
+        const invoiceId = filters.invoice_id;
         if (invoiceId) {
           const data = await sql`
             SELECT * FROM invoice_items WHERE invoice_id = ${invoiceId} ORDER BY created_at
@@ -404,7 +408,7 @@ export default async function handler(req) {
     // === PURCHASE ITEMS ===
     if (table === 'purchase_items') {
       if (req.method === 'GET') {
-        const purchaseId = url.searchParams.get('purchase_id');
+        const purchaseId = filters.purchase_id;
         if (purchaseId) {
           const data = await sql`
             SELECT * FROM purchase_items WHERE purchase_id = ${purchaseId} ORDER BY created_at
@@ -485,7 +489,7 @@ export default async function handler(req) {
     // === WHATSAPP QUEUE ===
     if (table === 'whatsapp_queue') {
       if (req.method === 'GET') {
-        const status = url.searchParams.get('status');
+        const status = filters.status;
         if (status === 'pending') {
           const data = await sql`
             SELECT * FROM whatsapp_queue WHERE status = 'pending' ORDER BY created_at
@@ -572,7 +576,7 @@ export default async function handler(req) {
     // === AUDIT LOG ===
     if (table === 'audit_log') {
       if (req.method === 'GET') {
-        const limit = url.searchParams.get('limit') || 100;
+        const limit = filters.limit || 100;
         const data = await sql`
           SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ${parseInt(limit)}
         `;
@@ -594,7 +598,7 @@ export default async function handler(req) {
     // === SYNC QUEUE (for offline support) ===
     if (table === 'sync_queue') {
       if (req.method === 'GET') {
-        const pendingOnly = url.searchParams.get('pending') === 'true';
+        const pendingOnly = filters.pending === 'true';
         if (pendingOnly) {
           const data = await sql`
             SELECT * FROM sync_queue WHERE synced = false ORDER BY created_at
