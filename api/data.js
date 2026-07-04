@@ -83,11 +83,8 @@ export default async function handler(req) {
     }
   }
 
-  // 🛠️ التعديل هنا: قراءة الهيدر بأمان لتجنب انهيار السيرفر أياً كان نوع الـ req object
-  const authHeader = typeof req.headers.get === 'function' 
-    ? req.headers.get('authorization') 
-    : req.headers['authorization'];
-
+  // Auth check for protected routes
+  const authHeader = req.headers.get('authorization');
   const user = verifyToken(authHeader);
   if (!user && req.method !== 'GET') {
     return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'غير مصرح' }, 401);
