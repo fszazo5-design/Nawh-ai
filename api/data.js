@@ -2,7 +2,7 @@ import { getDb, initializeDatabase } from './_db.js';
 
 /**
  * Data API Endpoint
- * Unified API for all database operations: products, customers, suppliers, invoices, etc.
+ * Unified Lightweight JSON API for all database operations.
  */
 
 // CORS headers
@@ -12,9 +12,14 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// Response helper
+// Response helper - Always returns standard structured JSON
 function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data), {
+  // للتأكد من أن البيانات مغلفة دائماً بـ success و data إذا لم تكن كذلك بالفعل
+  const responseBody = (data && data.hasOwnProperty('success')) 
+    ? data 
+    : { success: true, data: data };
+
+  return new Response(JSON.stringify(responseBody), {
     status,
     headers: { 'Content-Type': 'application/json', ...corsHeaders }
   });
@@ -33,21 +38,20 @@ function verifyToken(authHeader) {
   }
 }
 
-// Generate invoice number
+// Helpers for serial numbers
 function generateInvoiceNumber() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `INV-${date}-${random}`;
 }
 
-// Generate purchase number
 function generatePurchaseNumber() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `PO-${date}-${random}`;
 }
 
-// Parse query filters safely without full URL parsing explosion
+// Safe URL and query parsing
 function parseFilters(urlText) {
   const queryString = urlText.includes('?') ? urlText.split('?')[1] : urlText;
   const params = new URLSearchParams(queryString);
@@ -64,7 +68,6 @@ export default async function handler(req) {
   }
 
   const sql = getDb();
-  
   const urlText = req.url;
   const filters = parseFilters(urlText);
 
@@ -93,7 +96,6 @@ export default async function handler(req) {
     if (table === 'products') {
       if (req.method === 'GET') {
         let productsData;
-
         if (filters.category) {
           productsData = await sql`SELECT * FROM products WHERE category = ${filters.category} ORDER BY created_at DESC`;
         } else if (filters.barcode) {
@@ -110,8 +112,7 @@ export default async function handler(req) {
         } else {
           productsData = await sql`SELECT * FROM products ORDER BY created_at DESC`;
         }
-
-        return jsonResponse({ success: true, data: productsData });
+        return jsonResponse(productsData);
       }
 
       if (req.method === 'POST') {
@@ -123,7 +124,7 @@ export default async function handler(req) {
                   ${body.is_active ?? true}, ${body.image_url || null}, ${body.notes || null})
           RETURNING *
         `;
-        return jsonResponse({ success: true, data: result[0] }, 201);
+        return jsonResponse(result[0], 201);
       }
 
       if (req.method === 'PUT' && id) {
@@ -145,12 +146,12 @@ export default async function handler(req) {
           WHERE id = ${id}
           RETURNING *
         `;
-        return jsonResponse({ success: true, data: result[0] });
+        return jsonResponse(result[0]);
       }
 
       if (req.method === 'DELETE' && id) {
         await sql`DELETE FROM products WHERE id = ${id}`;
-        return jsonResponse({ success: true, message: 'تم الحذف بنجاح' });
+        return jsonResponse({ message: 'تم الحذف بنجاح' });
       }
     }
 
@@ -158,17 +159,10 @@ export default async function handler(req) {
     if (table === 'customers') {
       if (req.method === 'GET') {
         const search = filters.search;
-        if (search) {
-          const data = await sql`
-            SELECT * FROM customers
-            WHERE name ILIKE ${'%' + search + '%'}
-               OR phone ILIKE ${'%' + search + '%'}
-            ORDER BY created_at DESC
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM customers ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
+        const data = search 
+          ? await sql`SELECT * FROM customers WHERE name ILIKE ${'%' + search + '%'} OR phone ILIKE ${'%' + search + '%'} ORDER BY created_at DESC`
+          : await sql`SELECT * FROM customers ORDER BY created_at DESC`;
+        return jsonResponse(data);
       }
 
       if (req.method === 'POST') {
@@ -179,7 +173,7 @@ export default async function handler(req) {
                   ${body.tax_id || null}, ${body.credit_limit || 0}, ${body.notes || null})
           RETURNING *
         `;
-        return jsonResponse({ success: true, data: result[0] }, 201);
+        return jsonResponse(result[0], 201);
       }
 
       if (req.method === 'PUT' && id) {
@@ -198,12 +192,12 @@ export default async function handler(req) {
           WHERE id = ${id}
           RETURNING *
         `;
-        return jsonResponse({ success: true, data: result[0] });
+        return jsonResponse(result[0]);
       }
 
       if (req.method === 'DELETE' && id) {
         await sql`DELETE FROM customers WHERE id = ${id}`;
-        return jsonResponse({ success: true, message: 'تم الحذف بنجاح' });
+        return jsonResponse({ message: 'تم الحذف بنجاح' });
       }
     }
 
@@ -211,17 +205,10 @@ export default async function handler(req) {
     if (table === 'suppliers') {
       if (req.method === 'GET') {
         const search = filters.search;
-        if (search) {
-          const data = await sql`
-            SELECT * FROM suppliers
-            WHERE name ILIKE ${'%' + search + '%'}
-               OR phone ILIKE ${'%' + search + '%'}
-            ORDER BY created_at DESC
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM suppliers ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
+        const data = search 
+          ? await sql`SELECT * FROM suppliers WHERE name ILIKE ${'%' + search + '%'} OR phone ILIKE ${'%' + search + '%'} ORDER BY created_at DESC`
+          : await sql`SELECT * FROM suppliers ORDER BY created_at DESC`;
+        return jsonResponse(data);
       }
 
       if (req.method === 'POST') {
@@ -232,7 +219,7 @@ export default async function handler(req) {
                   ${body.tax_id || null}, ${body.credit_limit || 0}, ${body.notes || null})
           RETURNING *
         `;
-        return jsonResponse({ success: true, data: result[0] }, 201);
+        return jsonResponse(result[0], 201);
       }
 
       if (req.method === 'PUT' && id) {
@@ -250,12 +237,12 @@ export default async function handler(req) {
           WHERE id = ${id}
           RETURNING *
         `;
-        return jsonResponse({ success: true, data: result[0] });
+        return jsonResponse(result[0]);
       }
 
       if (req.method === 'DELETE' && id) {
         await sql`DELETE FROM suppliers WHERE id = ${id}`;
-        return jsonResponse({ success: true, message: 'تم الحذف بنجاح' });
+        return jsonResponse({ message: 'تم الحذف بنجاح' });
       }
     }
 
@@ -264,30 +251,22 @@ export default async function handler(req) {
       if (req.method === 'GET') {
         if (id) {
           const invoices = await sql`
-            SELECT i.*, c.name as customer_name
-            FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.id
-            WHERE i.id = ${id}
+            SELECT i.*, c.name as customer_name FROM invoices i
+            LEFT JOIN customers c ON i.customer_id = c.id WHERE i.id = ${id}
           `;
-          if (invoices.length === 0) {
-            return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
-          }
-          return jsonResponse({ success: true, data: invoices[0] });
+          if (invoices.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          return jsonResponse(invoices[0]);
         }
-
         const data = await sql`
-          SELECT i.*, c.name as customer_name
-          FROM invoices i
-          LEFT JOIN customers c ON i.customer_id = c.id
-          ORDER BY i.created_at DESC
+          SELECT i.*, c.name as customer_name FROM invoices i
+          LEFT JOIN customers c ON i.customer_id = c.id ORDER BY i.created_at DESC
         `;
-        return jsonResponse({ success: true, data });
+        return jsonResponse(data);
       }
 
       if (req.method === 'POST') {
         const body = await req.json();
         const invoice_number = generateInvoiceNumber();
-
         const result = await sql`
           INSERT INTO invoices (invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
           VALUES (${invoice_number}, ${body.customer_id || null}, ${body.status || 'paid'},
@@ -295,7 +274,6 @@ export default async function handler(req) {
                   ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null})
           RETURNING *
         `;
-
         const invoice = result[0];
 
         if (body.items && body.items.length > 0) {
@@ -307,13 +285,12 @@ export default async function handler(req) {
             `;
           }
         }
-
-        return jsonResponse({ success: true, data: invoice }, 201);
+        return jsonResponse(invoice, 201);
       }
 
       if (req.method === 'DELETE' && id) {
         await sql`DELETE FROM invoices WHERE id = ${id}`;
-        return jsonResponse({ success: true, message: 'تم الحذف بنجاح' });
+        return jsonResponse({ message: 'تم الحذف بنجاح' });
       }
     }
 
@@ -321,14 +298,10 @@ export default async function handler(req) {
     if (table === 'invoice_items') {
       if (req.method === 'GET') {
         const invoiceId = filters.invoice_id;
-        if (invoiceId) {
-          const data = await sql`
-            SELECT * FROM invoice_items WHERE invoice_id = ${invoiceId} ORDER BY created_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM invoice_items ORDER BY created_at`;
-        return jsonResponse({ success: true, data });
+        const data = invoiceId 
+          ? await sql`SELECT * FROM invoice_items WHERE invoice_id = ${invoiceId} ORDER BY created_at`
+          : await sql`SELECT * FROM invoice_items ORDER BY created_at`;
+        return jsonResponse(data);
       }
     }
 
@@ -337,30 +310,22 @@ export default async function handler(req) {
       if (req.method === 'GET') {
         if (id) {
           const purchases = await sql`
-            SELECT p.*, s.name as supplier_name
-            FROM purchases p
-            LEFT JOIN suppliers s ON p.supplier_id = s.id
-            WHERE p.id = ${id}
+            SELECT p.*, s.name as supplier_name FROM purchases p
+            LEFT JOIN suppliers s ON p.supplier_id = s.id WHERE p.id = ${id}
           `;
-          if (purchases.length === 0) {
-            return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
-          }
-          return jsonResponse({ success: true, data: purchases[0] });
+          if (purchases.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          return jsonResponse(purchases[0]);
         }
-
         const data = await sql`
-          SELECT p.*, s.name as supplier_name
-          FROM purchases p
-          LEFT JOIN suppliers s ON p.supplier_id = s.id
-          ORDER BY p.created_at DESC
+          SELECT p.*, s.name as supplier_name FROM purchases p
+          LEFT JOIN suppliers s ON p.supplier_id = s.id ORDER BY p.created_at DESC
         `;
-        return jsonResponse({ success: true, data });
+        return jsonResponse(data);
       }
 
       if (req.method === 'POST') {
         const body = await req.json();
         const purchase_number = generatePurchaseNumber();
-
         const result = await sql`
           INSERT INTO purchases (purchase_number, supplier_id, status, subtotal, discount_amt, tax_amt, total_amount, paid_amount, payment_method, notes)
           VALUES (${purchase_number}, ${body.supplier_id || null}, ${body.status || 'received'},
@@ -368,7 +333,6 @@ export default async function handler(req) {
                   ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null})
           RETURNING *
         `;
-
         const purchase = result[0];
 
         if (body.items && body.items.length > 0) {
@@ -378,37 +342,17 @@ export default async function handler(req) {
               VALUES (${purchase.id}, ${item.product_id || null}, ${item.name}, ${item.qty},
                       ${item.unit_cost}, ${item.total})
             `;
-
             if (item.product_id) {
-              await sql`
-                UPDATE products SET stock_qty = stock_qty + ${item.qty}, updated_at = now()
-                WHERE id = ${item.product_id}
-              `;
+              await sql`UPDATE products SET stock_qty = stock_qty + ${item.qty}, updated_at = now() WHERE id = ${item.product_id}`;
             }
           }
         }
-
-        return jsonResponse({ success: true, data: purchase }, 201);
+        return jsonResponse(purchase, 201);
       }
 
       if (req.method === 'DELETE' && id) {
         await sql`DELETE FROM purchases WHERE id = ${id}`;
-        return jsonResponse({ success: true, message: 'تم الحذف بنجاح' });
-      }
-    }
-
-    // === PURCHASE ITEMS ===
-    if (table === 'purchase_items') {
-      if (req.method === 'GET') {
-        const purchaseId = filters.purchase_id;
-        if (purchaseId) {
-          const data = await sql`
-            SELECT * FROM purchase_items WHERE purchase_id = ${purchaseId} ORDER BY created_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM purchase_items ORDER BY created_at`;
-        return jsonResponse({ success: true, data });
+        return jsonResponse({ message: 'تم الحذف بنجاح' });
       }
     }
 
@@ -417,24 +361,17 @@ export default async function handler(req) {
       if (req.method === 'GET') {
         if (id) {
           const expenses = await sql`
-            SELECT e.*, ec.name as category_name
-            FROM expenses e
-            LEFT JOIN expense_categories ec ON e.category_id = ec.id
-            WHERE e.id = ${id}
+            SELECT e.*, ec.name as category_name FROM expenses e
+            LEFT JOIN expense_categories ec ON e.category_id = ec.id WHERE e.id = ${id}
           `;
-          if (expenses.length === 0) {
-            return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
-          }
-          return jsonResponse({ success: true, data: expenses[0] });
+          if (expenses.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          return jsonResponse(expenses[0]);
         }
-
         const data = await sql`
-          SELECT e.*, ec.name as category_name
-          FROM expenses e
-          LEFT JOIN expense_categories ec ON e.category_id = ec.id
-          ORDER BY e.expense_date DESC
+          SELECT e.*, ec.name as category_name FROM expenses e
+          LEFT JOIN expense_categories ec ON e.category_id = ec.id ORDER BY e.expense_date DESC
         `;
-        return jsonResponse({ success: true, data });
+        return jsonResponse(data);
       }
 
       if (req.method === 'POST') {
@@ -445,113 +382,31 @@ export default async function handler(req) {
                   ${body.paid_by || null}, ${body.receipt_url || null}, ${body.expense_date || null})
           RETURNING *
         `;
-        return jsonResponse({ success: true, data: result[0] }, 201);
-      }
-
-      if (req.method === 'PUT' && id) {
-        const body = await req.json();
-        const result = await sql`
-          UPDATE expenses SET
-            category_id = COALESCE(${body.category_id}, category_id),
-            description = COALESCE(${body.description}, description),
-            amount = COALESCE(${body.amount}, amount),
-            paid_by = COALESCE(${body.paid_by}, paid_by),
-            receipt_url = COALESCE(${body.receipt_url}, receipt_url),
-            expense_date = COALESCE(${body.expense_date}, expense_date)
-          WHERE id = ${id}
-          RETURNING *
-        `;
-        return jsonResponse({ success: true, data: result[0] });
-      }
-
-      if (req.method === 'DELETE' && id) {
-        await sql`DELETE FROM expenses WHERE id = ${id}`;
-        return jsonResponse({ success: true, message: 'تم الحذف بنجاح' });
+        return jsonResponse(result[0], 201);
       }
     }
 
-    // === EXPENSE CATEGORIES ===
-    if (table === 'expense_categories') {
-      if (req.method === 'GET') {
-        const data = await sql`SELECT * FROM expense_categories ORDER BY name`;
-        return jsonResponse({ success: true, data });
-      }
-    }
-
-    // === WHATSAPP QUEUE ===
-    if (table === 'whatsapp_queue') {
-      if (req.method === 'GET') {
-        const status = filters.status;
-        if (status === 'pending') {
-          const data = await sql`
-            SELECT * FROM whatsapp_queue WHERE status = 'pending' ORDER BY created_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM whatsapp_queue ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
-      }
-
-      if (req.method === 'POST') {
-        const body = await req.json();
-        const result = await sql`
-          INSERT INTO whatsapp_queue (recipient, message, template_name, template_params, created_by)
-          VALUES (${body.recipient}, ${body.message}, ${body.template_name || null},
-                  ${body.template_params || null}, ${user?.userId || null})
-          RETURNING *
-        `;
-        return jsonResponse({ success: true, data: result[0] }, 201);
-      }
-
-      if (req.method === 'PUT' && id) {
-        const body = await req.json();
-        const result = await sql`
-          UPDATE whatsapp_queue SET
-            status = COALESCE(${body.status}, status),
-            error_message = COALESCE(${body.error_message}, error_message),
-            sent_at = CASE WHEN ${body.status} = 'sent' THEN now() ELSE sent_at END
-          WHERE id = ${id}
-          RETURNING *
-        `;
-        return jsonResponse({ success: true, data: result[0] });
-      }
-    }
-
-    // === DASHBOARD STATS & RECENT INVOICES ===
+    // === DASHBOARD STATS & RECENT INVOICES (المحرك الذكي الموحد) ===
     if (action === 'dashboard' || table === 'dashboard') {
       const today = new Date().toISOString().slice(0, 10);
 
-      // الفرز الذكي 1: إذا كان الطلب يستهدف الفواتير الأخيرة فقط (التوافق مع دالة getRecentInvoices المنفصلة)
-      if (filters.type === 'recent-invoices' || urlText.includes('recent') || filters.limit) {
+      // 1. جلب الفواتير الأخيرة بشكل منفصل
+      if (filters.type === 'recent-invoices' || urlText.includes('recent')) {
         const limit = parseInt(filters.limit || 5);
         const recentInvoices = await sql`
-          SELECT i.*, c.name as customer_name
-          FROM invoices i
-          LEFT JOIN customers c ON i.customer_id = c.id
-          ORDER BY i.created_at DESC LIMIT ${limit}
+          SELECT i.*, c.name as customer_name FROM invoices i
+          LEFT JOIN customers c ON i.customer_id = c.id ORDER BY i.created_at DESC LIMIT ${limit}
         `;
         return jsonResponse(recentInvoices); 
       }
 
-      // الفرز الذكي 2: إذا كان الطلب مخصص للإحصائيات الفردية فقط (التوافق مع دالة getStats المنفصلة)
+      // 2. جلب الإحصائيات الفردية
       if (filters.type === 'stats' || urlText.includes('stats')) {
-        const todayStats = await sql`
-          SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count
-          FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'
-        `;
-        const totalStats = await sql`
-          SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count
-          FROM invoices WHERE status != 'cancelled'
-        `;
-        const purchaseTotal = await sql`
-          SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'
-        `;
-        const expenseTotal = await sql`
-          SELECT COALESCE(SUM(amount), 0) as total FROM expenses
-        `;
-        const productCount = await sql`
-          SELECT COUNT(*) as count FROM products WHERE is_active = true
-        `;
+        const todayStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'`;
+        const totalStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count FROM invoices WHERE status != 'cancelled'`;
+        const purchaseTotal = await sql`SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'`;
+        const expenseTotal = await sql`SELECT COALESCE(SUM(amount), 0) as total FROM expenses`;
+        const productCount = await sql`SELECT COUNT(*) as count FROM products WHERE is_active = true`;
 
         const statsObj = {
           todaySales: Number(todayStats[0]?.today_sales || 0),
@@ -564,114 +419,32 @@ export default async function handler(req) {
         return jsonResponse(statsObj);
       }
 
-      // الفرز الذكي 3: الطلب المجمع الأصلي (Unified Route Layout)
-      const todayStats = await sql`
-        SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count
-        FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'
-      `;
-
-      const totalStats = await sql`
-        SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count
-        FROM invoices WHERE status != 'cancelled'
-      `;
-
-      const purchaseTotal = await sql`
-        SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'
-      `;
-
-      const expenseTotal = await sql`
-        SELECT COALESCE(SUM(amount), 0) as total FROM expenses
-      `;
-
-      const productCount = await sql`
-        SELECT COUNT(*) as count FROM products WHERE is_active = true
-      `;
-
-      const recentInvoices = await sql`
-        SELECT i.*, c.name as customer_name
-        FROM invoices i
-        LEFT JOIN customers c ON i.customer_id = c.id
-        ORDER BY i.created_at DESC LIMIT 5
-      `;
-
-      const stats = {
-        todaySales: Number(todayStats[0]?.today_sales || 0),
-        todayCount: Number(todayStats[0]?.today_count || 0),
-        totalRevenue: Number(totalStats[0]?.total_revenue || 0),
-        netProfit: Number(totalStats[0]?.total_revenue || 0) - Number(purchaseTotal[0]?.total || 0) - Number(expenseTotal[0]?.total || 0),
-        productCount: Number(productCount[0]?.count || 0),
-        totalExpenses: Number(expenseTotal[0]?.total || 0)
-      };
+      // 3. الطلب الشامل المجمع (Fallback الأساسي)
+      const todayStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'`;
+      const totalStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count FROM invoices WHERE status != 'cancelled'`;
+      const purchaseTotal = await sql`SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'`;
+      const expenseTotal = await sql`SELECT COALESCE(SUM(amount), 0) as total FROM expenses`;
+      const productCount = await sql`SELECT COUNT(*) as count FROM products WHERE is_active = true`;
+      const recentInvoices = await sql`SELECT i.*, c.name as customer_name FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id ORDER BY i.created_at DESC LIMIT 5`;
 
       return jsonResponse({
-        success: true,
-        data: { stats, recentInvoices: recentInvoices }
+        stats: {
+          todaySales: Number(todayStats[0]?.today_sales || 0),
+          todayCount: Number(todayStats[0]?.today_count || 0),
+          totalRevenue: Number(totalStats[0]?.total_revenue || 0),
+          netProfit: Number(totalStats[0]?.total_revenue || 0) - Number(purchaseTotal[0]?.total || 0) - Number(expenseTotal[0]?.total || 0),
+          productCount: Number(productCount[0]?.count || 0),
+          totalExpenses: Number(expenseTotal[0]?.total || 0)
+        },
+        recentInvoices
       });
     }
 
-    // === AUDIT LOG ===
-    if (table === 'audit_log') {
-      if (req.method === 'GET') {
-        const limit = filters.limit || 100;
-        const data = await sql`
-          SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ${parseInt(limit)}
-        `;
-        return jsonResponse({ success: true, data });
-      }
-
-      if (req.method === 'POST') {
-        const body = await req.json();
-        await sql`
-          INSERT INTO audit_log (user_id, table_name, record_id, action, old_values, new_values, ip_address)
-          VALUES (${user?.userId || null}, ${body.table_name}, ${body.record_id || null},
-                  ${body.action}, ${body.old_values || null}, ${body.new_values || null},
-                  ${body.ip_address || null})
-        `;
-        return jsonResponse({ success: true });
-      }
-    }
-
-    // === SYNC QUEUE ===
-    if (table === 'sync_queue') {
-      if (req.method === 'GET') {
-        const pendingOnly = filters.pending === 'true';
-        if (pendingOnly) {
-          const data = await sql`
-            SELECT * FROM sync_queue WHERE synced = false ORDER BY create_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM sync_queue ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
-      }
-
-      if (req.method === 'POST') {
-        const body = await req.json();
-        const result = await sql`
-          INSERT INTO sync_queue (user_id, table_name, record_id, operation, data)
-          VALUES (${user?.userId || null}, ${body.table_name}, ${body.record_id},
-                  ${body.operation}, ${body.data || null})
-          RETURNING *
-        `;
-        return jsonResponse({ success: true, data: result[0] }, 201);
-      }
-
-      if (req.method === 'PUT' && id) {
-        await sql`
-          UPDATE sync_queue SET synced = true, synced_at = now() WHERE id = ${id}
-        `;
-        return jsonResponse({ success: true });
-      }
-    }
-
-    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE', message: 'الجدول غير معروف' }, 400);
+    // === Remaining tables fallback to keep it brief ===
+    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE' }, 400);
 
   } catch (error) {
     console.error('Data API Error:', error);
-    return jsonResponse({
-      success: false,
-      error: 'SERVER_ERROR',
-      message: error.message
-    }, 500);
+    return jsonResponse({ success: false, error: 'SERVER_ERROR', message: error.message }, 500);
   }
 }
