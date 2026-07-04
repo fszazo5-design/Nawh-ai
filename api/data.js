@@ -65,7 +65,6 @@ export default async function handler(req) {
 
   const sql = getDb();
   
-  // 💡 الحل الآمن: قراءة المعاملات مباشرة عبر URLSearchParams بناءً على النص القادم
   const urlText = req.url;
   const filters = parseFilters(urlText);
 
@@ -83,7 +82,6 @@ export default async function handler(req) {
     }
   }
 
-  // 🛠️ تم التعديل هنا: قراءة الـ header كـ Object عادي متوافق مع Node.js / Vercel Serverless
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
   const user = verifyToken(authHeader);
   if (!user && req.method !== 'GET') {
@@ -94,30 +92,27 @@ export default async function handler(req) {
     // === PRODUCTS ===
     if (table === 'products') {
       if (req.method === 'GET') {
-        let query = sql`SELECT * FROM products WHERE 1=1`;
+        let productsData;
 
         if (filters.category) {
-          query = sql`SELECT * FROM products WHERE category = ${filters.category}`;
-        }
-        if (filters.barcode) {
-          query = sql`SELECT * FROM products WHERE barcode = ${filters.barcode} LIMIT 1`;
-        }
-        if (filters.search) {
-          query = sql`
+          productsData = await sql`SELECT * FROM products WHERE category = ${filters.category} ORDER BY created_at DESC`;
+        } else if (filters.barcode) {
+          productsData = await sql`SELECT * FROM products WHERE barcode = ${filters.barcode} LIMIT 1`;
+        } else if (filters.search) {
+          productsData = await sql`
             SELECT * FROM products
             WHERE name ILIKE ${'%' + filters.search + '%'}
                OR barcode ILIKE ${'%' + filters.search + '%'}
             ORDER BY created_at DESC
           `;
-        }
-        if (filters.is_active !== undefined) {
-          query = sql`SELECT * FROM products WHERE is_active = ${filters.is_active === 'true'} ORDER BY created_at DESC`;
-        }
-        if (!filters.category && !filters.barcode && !filters.search && !filters.is_active) {
-          query = sql`SELECT * FROM products ORDER BY created_at DESC`;
+        } else if (filters.is_active !== undefined) {
+          productsData = await sql`SELECT * FROM products WHERE is_active = ${filters.is_active === 'true'} ORDER BY created_at DESC`;
+        } else {
+          productsData = await sql`SELECT * FROM products ORDER BY created_at DESC`;
         }
 
-        return jsonResponse({ success: true, data: query });
+        // إرجاع البيانات الفعلية المستخرجة وليس كائن الاستعلام
+        return jsonResponse({ success: true, data: productsData });
       }
 
       if (req.method === 'POST') {
@@ -304,7 +299,6 @@ export default async function handler(req) {
 
         const invoice = result[0];
 
-        // Insert invoice items
         if (body.items && body.items.length > 0) {
           for (const item of body.items) {
             await sql`
@@ -378,7 +372,6 @@ export default async function handler(req) {
 
         const purchase = result[0];
 
-        // Insert purchase items and update stock
         if (body.items && body.items.length > 0) {
           for (const item of body.items) {
             await sql`
@@ -387,7 +380,6 @@ export default async function handler(req) {
                       ${item.unit_cost}, ${item.total})
             `;
 
-            // Update product stock
             if (item.product_id) {
               await sql`
                 UPDATE products SET stock_qty = stock_qty + ${item.qty}, updated_at = now()
@@ -596,13 +588,13 @@ export default async function handler(req) {
       }
     }
 
-    // === SYNC QUEUE (for offline support) ===
+    // === SYNC QUEUE ===
     if (table === 'sync_queue') {
       if (req.method === 'GET') {
         const pendingOnly = filters.pending === 'true';
         if (pendingOnly) {
           const data = await sql`
-            SELECT * FROM sync_queue WHERE synced = false ORDER BY created_at
+            SELECT * FROM sync_queue WHERE synced = false ORDER BY create_at
           `;
           return jsonResponse({ success: true, data });
         }
