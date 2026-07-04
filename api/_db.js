@@ -1,8 +1,8 @@
-import { neon } from '@neondatabase/serverless';
+import postgres from 'postgres';
 
 /**
  * Database connection helper for Vercel Serverless Functions
- * Uses Neon serverless PostgreSQL
+ * Uses Native PostgreSQL client via postgres.js
  */
 
 let sql = null;
@@ -13,7 +13,12 @@ export function getDb() {
     if (!connectionString) {
       throw new Error('DATABASE_URL environment variable is not set');
     }
-    sql = neon(connectionString);
+    // إنشاء الاتصال متوافق مع بيئة السيرفرليس
+    sql = postgres(connectionString, {
+      ssl: 'require', // ضروري للاتصال بقواعد البيانات السحابية مثل Neon
+      max: 1,         // مثالي لبيئة Vercel Serverless لمنع استهلاك الاتصالات
+      idle_timeout: 20
+    });
   }
   return sql;
 }
