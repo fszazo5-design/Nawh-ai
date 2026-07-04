@@ -20,7 +20,6 @@ function verifyToken(authHeader) {
   const token = authHeader?.replace('Bearer ', '');
   if (!token) return null;
   try {
-    // التحقق الفعلي من محتوى التوكن وفترة صلاحيته برمجياً
     const base64Url = token.split('.')[1];
     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
     const jsonPayload = decodeURIComponent(
@@ -39,7 +38,7 @@ function verifyToken(authHeader) {
   }
 }
 
-// Generate invoice serial numbers securely
+// Generate serial numbers securely
 function generateInvoiceNumber() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -283,6 +282,8 @@ async function dataRouter(req) {
       if (req.method === 'POST') {
         const body = await req.json();
         const invoice_number = generateInvoiceNumber();
+        
+        // تنفيذ العملية كاملة بضمان معالجة الحقول
         const result = await sql`
           INSERT INTO invoices (invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
           VALUES (${invoice_number}, ${body.customer_id || null}, ${body.status || 'paid'},
@@ -299,6 +300,13 @@ async function dataRouter(req) {
               VALUES (${invoice.id}, ${item.product_id || null}, ${item.name}, ${item.qty},
                       ${item.unit_price}, ${item.discount || 0}, ${item.total})
             `;
+            // خصم الكمية تلقائياً من المخزن عند بيع المنتج
+            if (item.product_id) {
+              await sql`
+                UPDATE products SET stock_qty = stock_qty - ${item.qty}, updated_at = now()
+                WHERE id = ${item.product_id}
+              `;
+            }
           }
         }
         return jsonResponse({ success: true, data: invoice }, 201);
@@ -596,7 +604,7 @@ async function dataRouter(req) {
       }
     }
 
-    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE', message: 'الجدول المطلوبة غير موجود' }, 400);
+    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE', message: 'الجدول المطلوب غير موجود' }, 400);
 
   } catch (error) {
     console.error('Data API Error:', error);
