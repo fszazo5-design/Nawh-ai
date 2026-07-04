@@ -15,7 +15,7 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// Verify auth token with advanced standard method
+// دالة فحص وفك التوكن واستخراج البيانات (تأكد من مطابقتها لنظام التوكن لديك)
 function verifyToken(authHeader) {
   const token = authHeader?.replace('Bearer ', '');
   if (!token) return null;
@@ -28,17 +28,20 @@ function verifyToken(authHeader) {
         .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
         .join('')
     );
-    const payload = JSON.parse(jsonPayload);
-    
-    // فحص انتهاء صلاحية التوكن
-    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
-    return payload;
+    return JSON.parse(jsonPayload);
   } catch (error) {
     return null;
   }
 }
 
-// Generate serial numbers securely
+// دالة تنظيف الإيميل وتحويله لاسم السكيمّا المطابق لكود الـ Auth
+function convertEmailToSchemaName(email) {
+  if (!email) return 'public';
+  const cleanEmail = email.toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
+  return `schema_${cleanEmail}`;
+}
+
+// Generate invoice serial numbers securely
 function generateInvoiceNumber() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -82,14 +85,22 @@ async function dataRouter(req) {
     }
   }
 
-  // Auth Middleware check for protected tables/actions
+  // 1. التحقق من التوكن واستخراج بيانات المستخدم (الإيميل ضروري للسكيمّا)
   const authHeader = req.headers.get('authorization');
   const user = verifyToken(authHeader);
+  
   if (!user && req.method !== 'GET') {
     return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'غير مصرح للقيام بهذا الإجراء' }, 401);
   }
 
   try {
+    // 2. 💡 الحل السحري: توجيه قاعدة البيانات للسكيمّا الخاصة بالمستخدم الحالي فوراً 💡
+    if (user && user.email) {
+      const userSchema = convertEmailToSchemaName(user.email);
+      // إجبار هذا الاتصال الحالي على القراءة والكتابة داخل سكيمّا المستخدم
+      await sql.unsafe(`SET search_path TO ${userSchema}, public`);
+    }
+
     // === PRODUCTS ===
     if (table === 'products') {
       if (req.method === 'GET') {
@@ -282,8 +293,6 @@ async function dataRouter(req) {
       if (req.method === 'POST') {
         const body = await req.json();
         const invoice_number = generateInvoiceNumber();
-        
-        // تنفيذ العملية كاملة بضمان معالجة الحقول
         const result = await sql`
           INSERT INTO invoices (invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
           VALUES (${invoice_number}, ${body.customer_id || null}, ${body.status || 'paid'},
@@ -300,7 +309,6 @@ async function dataRouter(req) {
               VALUES (${invoice.id}, ${item.product_id || null}, ${item.name}, ${item.qty},
                       ${item.unit_price}, ${item.discount || 0}, ${item.total})
             `;
-            // خصم الكمية تلقائياً من المخزن عند بيع المنتج
             if (item.product_id) {
               await sql`
                 UPDATE products SET stock_qty = stock_qty - ${item.qty}, updated_at = now()
@@ -469,43 +477,6 @@ async function dataRouter(req) {
       }
     }
 
-    // === WHATSAPP QUEUE ===
-    if (table === 'whatsapp_queue') {
-      if (req.method === 'GET') {
-        const status = filters.status;
-        if (status === 'pending') {
-          const data = await sql`SELECT * FROM whatsapp_queue WHERE status = 'pending' ORDER BY created_at`;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM whatsapp_queue ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
-      }
-
-      if (req.method === 'POST') {
-        const body = await req.json();
-        const result = await sql`
-          INSERT INTO whatsapp_queue (recipient, message, template_name, template_params, created_by)
-          VALUES (${body.recipient}, ${body.message}, ${body.template_name || null},
-                  ${body.template_params || null}, ${user?.userId || null})
-          RETURNING *
-        `;
-        return jsonResponse({ success: true, data: result[0] }, 201);
-      }
-
-      if (req.method === 'PUT' && id) {
-        const body = await req.json();
-        const result = await sql`
-          UPDATE whatsapp_queue SET
-            status = COALESCE(${body.status}, status),
-            error_message = COALESCE(${body.error_message}, error_message),
-            sent_at = CASE WHEN ${body.status} = 'sent' THEN now() ELSE sent_at END
-          WHERE id = ${id}
-          RETURNING *
-        `;
-        return jsonResponse({ success: true, data: result[0] });
-      }
-    }
-
     // === DASHBOARD STATS ===
     if (action === 'dashboard') {
       const today = new Date().toISOString().slice(0, 10);
@@ -547,61 +518,6 @@ async function dataRouter(req) {
         success: true,
         data: { stats, recentInvoices }
       });
-    }
-
-    // === AUDIT LOG ===
-    if (table === 'audit_log') {
-      if (req.method === 'GET') {
-        const limit = filters.limit || 100;
-        const data = await sql`
-          SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ${parseInt(limit)}
-        `;
-        return jsonResponse({ success: true, data });
-      }
-
-      if (req.method === 'POST') {
-        const body = await req.json();
-        await sql`
-          INSERT INTO audit_log (user_id, table_name, record_id, action, old_values, new_values, ip_address)
-          VALUES (${user?.userId || null}, ${body.table_name}, ${body.record_id || null},
-                  ${body.action}, ${body.old_values || null}, ${body.new_values || null},
-                  ${body.ip_address || null})
-        `;
-        return jsonResponse({ success: true });
-      }
-    }
-
-    // === SYNC QUEUE ===
-    if (table === 'sync_queue') {
-      if (req.method === 'GET') {
-        const pendingOnly = filters.pending === 'true';
-        if (pendingOnly) {
-          const data = await sql`
-            SELECT * FROM sync_queue WHERE synced = false ORDER BY created_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM sync_queue ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
-      }
-
-      if (req.method === 'POST') {
-        const body = await req.json();
-        const result = await sql`
-          INSERT INTO sync_queue (user_id, table_name, record_id, operation, data)
-          VALUES (${user?.userId || null}, ${body.table_name}, ${body.record_id},
-                  ${body.operation}, ${body.data || null})
-          RETURNING *
-        `;
-        return jsonResponse({ success: true, data: result[0] }, 201);
-      }
-
-      if (req.method === 'PUT' && id) {
-        await sql`
-          UPDATE sync_queue SET synced = true, synced_at = now() WHERE id = ${id}
-        `;
-        return jsonResponse({ success: true });
-      }
     }
 
     return jsonResponse({ success: false, error: 'UNKNOWN_TABLE', message: 'الجدول المطلوب غير موجود' }, 400);
