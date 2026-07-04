@@ -111,7 +111,6 @@ export default async function handler(req) {
           productsData = await sql`SELECT * FROM products ORDER BY created_at DESC`;
         }
 
-        // إرجاع البيانات الفعلية المستخرجة وليس كائن الاستعلام
         return jsonResponse({ success: true, data: productsData });
       }
 
@@ -518,10 +517,54 @@ export default async function handler(req) {
       }
     }
 
-    // === DASHBOARD STATS ===
-    if (action === 'dashboard') {
+    // === DASHBOARD STATS & RECENT INVOICES ===
+    if (action === 'dashboard' || table === 'dashboard') {
       const today = new Date().toISOString().slice(0, 10);
 
+      // الفرز الذكي 1: إذا كان الطلب يستهدف الفواتير الأخيرة فقط (التوافق مع دالة getRecentInvoices المنفصلة)
+      if (filters.type === 'recent-invoices' || urlText.includes('recent') || filters.limit) {
+        const limit = parseInt(filters.limit || 5);
+        const recentInvoices = await sql`
+          SELECT i.*, c.name as customer_name
+          FROM invoices i
+          LEFT JOIN customers c ON i.customer_id = c.id
+          ORDER BY i.created_at DESC LIMIT ${limit}
+        `;
+        return jsonResponse(recentInvoices); 
+      }
+
+      // الفرز الذكي 2: إذا كان الطلب مخصص للإحصائيات الفردية فقط (التوافق مع دالة getStats المنفصلة)
+      if (filters.type === 'stats' || urlText.includes('stats')) {
+        const todayStats = await sql`
+          SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count
+          FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'
+        `;
+        const totalStats = await sql`
+          SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count
+          FROM invoices WHERE status != 'cancelled'
+        `;
+        const purchaseTotal = await sql`
+          SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'
+        `;
+        const expenseTotal = await sql`
+          SELECT COALESCE(SUM(amount), 0) as total FROM expenses
+        `;
+        const productCount = await sql`
+          SELECT COUNT(*) as count FROM products WHERE is_active = true
+        `;
+
+        const statsObj = {
+          todaySales: Number(todayStats[0]?.today_sales || 0),
+          todayCount: Number(todayStats[0]?.today_count || 0),
+          totalRevenue: Number(totalStats[0]?.total_revenue || 0),
+          netProfit: Number(totalStats[0]?.total_revenue || 0) - Number(purchaseTotal[0]?.total || 0) - Number(expenseTotal[0]?.total || 0),
+          productCount: Number(productCount[0]?.count || 0),
+          totalExpenses: Number(expenseTotal[0]?.total || 0)
+        };
+        return jsonResponse(statsObj);
+      }
+
+      // الفرز الذكي 3: الطلب المجمع الأصلي (Unified Route Layout)
       const todayStats = await sql`
         SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count
         FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'
