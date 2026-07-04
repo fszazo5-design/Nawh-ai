@@ -83,8 +83,8 @@ export default async function handler(req) {
     }
   }
 
-  // Auth check for protected routes
-  const authHeader = req.headers.get('authorization');
+  // 🛠️ تم التعديل هنا: قراءة الـ header كـ Object عادي متوافق مع Node.js / Vercel Serverless
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
   const user = verifyToken(authHeader);
   if (!user && req.method !== 'GET') {
     return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'غير مصرح' }, 401);
