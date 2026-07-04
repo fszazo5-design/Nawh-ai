@@ -199,7 +199,8 @@ export default async function handler(req) {
             tax_id = COALESCE(${body.tax_id}, tax_id),
             credit_limit = COALESCE(${body.credit_limit}, credit_limit),
             notes = COALESCE(${body.notes}, notes),
-            is_active = COALESCE(${body.is_active}, is_active)
+            is_active = COALESCE(${body.is_active}, is_active),
+            updated_at = now()
           WHERE id = ${id}
           RETURNING *
         `;
