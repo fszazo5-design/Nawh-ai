@@ -47,28 +47,34 @@ function generatePurchaseNumber() {
   return `PO-${date}-${random}`;
 }
 
-// Parse query filters safely without full URL parsing explosion
-function parseFilters(urlText) {
-  const queryString = urlText.includes('?') ? urlText.split('?')[1] : urlText;
-  const params = new URLSearchParams(queryString);
+// ✨ تحليل احترافي وآمن للروابط سواء كانت روابط كاملة أو مسارات فرعية (Relative Paths)
+function parseFilters(req) {
   const filters = {};
-  for (const [key, value] of params.entries()) {
-    if (value) filters[key] = value;
+  try {
+    // إذا كان req.url يحتوي على الدومين الكامل أو مجرد مسار فرعي يبدأ بـ /
+    const urlText = req.url || '';
+    const queryString = urlText.includes('?') ? urlText.split('?')[1] : urlText;
+    const params = new URLSearchParams(queryString);
+    
+    for (const [key, value] of params.entries()) {
+      if (value) filters[key] = value;
+    }
+  } catch (e) {
+    console.error("Error parsing filters:", e);
   }
   return filters;
 }
 
 export default async function handler(req) {
+  // معالجة طلبات الـ CORS Preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   const sql = getDb();
   
-  // 💡 الحل الآمن: قراءة المعاملات مباشرة عبر URLSearchParams بناءً على النص القادم
-  const urlText = req.url;
-  const filters = parseFilters(urlText);
-
+  // 💡 استخراج الفلاتر والمعاملات بشكل مضمون 100% لتوصيل بيانات الواجهة
+  const filters = parseFilters(req);
   const table = filters.table;
   const id = filters.id;
   const action = filters.action;
@@ -83,10 +89,10 @@ export default async function handler(req) {
     }
   }
 
-  // 🛠️ التعديل هنا: قراءة الهيدر بأمان لتجنب انهيار السيرفر أياً كان نوع الـ req object
-  const authHeader = typeof req.headers.get === 'function' 
+  // 🛠️ قراءة الهيدر بأمان تام تدعم جميع أنواع الـ Request Objects لمنع الانهيار
+  const authHeader = typeof req.headers?.get === 'function' 
     ? req.headers.get('authorization') 
-    : req.headers['authorization'];
+    : req.headers?.['authorization'];
 
   const user = verifyToken(authHeader);
   if (!user && req.method !== 'GET') {
