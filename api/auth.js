@@ -1,9 +1,6 @@
-import { getDb } from './_db.js';
+const DATABASE_URL = process.env.DATABASE_URL;
 
-/**
- * Auth API Endpoint
- * Handles: login, register, logout, get-current-user
- */
+import { getDb } from './_db.js';
 
 // CORS headers
 const corsHeaders = {
@@ -12,10 +9,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// Simple hash function (for production use bcrypt)
+// Simple hash function
 async function hashPassword(password) {
   const encoder = new TextEncoder();
-  const data = encoder.encode(password + process.env.AUTH_SECRET || 'nawh-secret-key');
+  const data = encoder.encode(password + (process.env.AUTH_SECRET || 'nawh-secret-key'));
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
@@ -26,7 +23,6 @@ async function verifyPassword(password, hash) {
   return passwordHash === hash;
 }
 
-// Generate JWT-like token (simple version)
 function generateToken(userId, email, role) {
   const payload = { userId, email, role, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 };
   return btoa(JSON.stringify(payload));
@@ -42,7 +38,6 @@ function verifyToken(token) {
   }
 }
 
-// Response helper
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -50,19 +45,34 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-export default async function handler(req) {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
+// دالة لتنظيف الإيميل وتحويله لاسم سكيمّا صالح في PostgreSQL
+function convertEmailToSchemaName(email) {
+  const cleanEmail = email.toLowerCase().trim()
+    .replace(/[^a-z0-9]/g, '_'); // استبدال @ والـ . والرموز بشرطة سفلية
+  return `schema_${cleanEmail}`;
+}
 
+// دالة المعالجة الرئيسية الموحدة لجميع الطلبات
+async function handleAllRequests(req) {
   const sql = getDb();
   const url = new URL(req.url);
   const action = url.searchParams.get('action') || 'me';
 
   try {
+    // قراءة الـ body بأمان ودعم كل الحالات المتوقعة من الفرونت-إند
+    let body = {};
+    if (req.method === 'POST' || req.method === 'PUT') {
+      try {
+        // محاولة قراءة النص أولاً وتحويله لـ JSON لتجنب تجمد الدالة
+        const text = await req.text();
+        body = text ? JSON.parse(text) : {};
+      } catch (e) {
+        console.error("Error parsing request body:", e);
+      }
+    }
+
     // Register
     if (req.method === 'POST' && action === 'register') {
-      const body = await req.json();
       const { email, password, full_name } = body;
 
       if (!email || !password) {
@@ -90,23 +100,112 @@ export default async function handler(req) {
       const user = result[0];
       const token = generateToken(user.id, user.email, user.role);
 
+      // === 💡 بدء كود إنشاء السكيمّا والجداول الخاصة بالإيميل تلقائياً ===
+      const schemaName = convertEmailToSchemaName(email);
+
+      try {
+        // استخدام unsafe لتمرير اسم السكيمّا الديناميكي بأمان
+        await sql.unsafe(`
+          -- 1. إنشاء السكيمّا الجديدة باسم العميل
+          CREATE SCHEMA IF NOT EXISTS ${schemaName};
+
+          -- 2. إنشاء جدول المنتجات داخل السكيمّا الجديدة
+          CREATE TABLE IF NOT EXISTS ${schemaName}.products (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            barcode VARCHAR(100),
+            category VARCHAR(100),
+            unit VARCHAR(50) DEFAULT 'قطعة',
+            cost_price NUMERIC(10,2) DEFAULT 0,
+            sell_price NUMERIC(10,2) DEFAULT 0,
+            stock_qty INT DEFAULT 0,
+            min_stock_qty INT DEFAULT 0,
+            is_active BOOLEAN DEFAULT true,
+            image_url TEXT,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+          );
+
+          -- 3. إنشاء جدول العملاء داخل السكيمّا الجديدة
+          CREATE TABLE IF NOT EXISTS ${schemaName}.customers (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            phone VARCHAR(50),
+            email VARCHAR(100),
+            address TEXT,
+            tax_id VARCHAR(50),
+            credit_limit NUMERIC(10,2) DEFAULT 0,
+            notes TEXT,
+            is_active BOOLEAN DEFAULT true,
+            created_at TIMESTAMP DEFAULT now()
+          );
+
+          -- 4. إنشاء جدول الموردين داخل السكيمّا الجديدة
+          CREATE TABLE IF NOT EXISTS ${schemaName}.suppliers (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            phone VARCHAR(50),
+            email VARCHAR(100),
+            address TEXT,
+            tax_id VARCHAR(50),
+            credit_limit NUMERIC(10,2) DEFAULT 0,
+            notes TEXT,
+            is_active BOOLEAN DEFAULT true,
+            created_at TIMESTAMP DEFAULT now()
+          );
+
+          -- 5. إنشاء جدول الفواتير داخل السكيمّا الجديدة
+          CREATE TABLE IF NOT EXISTS ${schemaName}.invoices (
+            id SERIAL PRIMARY KEY,
+            invoice_number VARCHAR(100) NOT NULL,
+            customer_id INT,
+            status VARCHAR(50) DEFAULT 'paid',
+            subtotal NUMERIC(10,2) DEFAULT 0,
+            discount_amt NUMERIC(10,2) DEFAULT 0,
+            tax_rate NUMERIC(5,2) DEFAULT 0,
+            tax_amt NUMERIC(10,2) DEFAULT 0,
+            total_amount NUMERIC(10,2) DEFAULT 0,
+            paid_amount NUMERIC(10,2) DEFAULT 0,
+            payment_method VARCHAR(50) DEFAULT 'cash',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT now()
+          );
+
+          -- 6. إنشاء تفاصيل الفواتير داخل السكيمّا الجديدة
+          CREATE TABLE IF NOT EXISTS ${schemaName}.invoice_items (
+            id SERIAL PRIMARY KEY,
+            invoice_id INT,
+            product_id INT,
+            name VARCHAR(255),
+            qty INT DEFAULT 1,
+            unit_price NUMERIC(10,2) DEFAULT 0,
+            discount NUMERIC(10,2) DEFAULT 0,
+            total NUMERIC(10,2) DEFAULT 0,
+            created_at TIMESTAMP DEFAULT now()
+          );
+        `);
+      } catch (schemaError) {
+        console.error(`Failed to create schema for ${email}:`, schemaError);
+        // نكتفي بطباعة الخطأ لضمان عدم تعليق عملية التسجيل الأساسية إذا كانت السكيمّا موجودة مسبقاً
+      }
+      // === نهاية كود إنشاء السكيمّا ===
+
       return jsonResponse({
         success: true,
-        data: { user, token },
-        message: 'تم إنشاء الحساب بنجاح'
+        data: { user, token, schema: schemaName },
+        message: 'تم إنشاء الحساب وتجهيز المساحة الخاصة به بنجاح'
       }, 201);
     }
 
     // Login
     if (req.method === 'POST' && action === 'login') {
-      const body = await req.json();
       const { email, password } = body;
 
       if (!email || !password) {
         return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
       }
 
-      // Find user
       const users = await sql`SELECT * FROM users WHERE email = ${email}`;
       const user = users[0];
 
@@ -118,7 +217,6 @@ export default async function handler(req) {
         return jsonResponse({ success: false, error: 'ACCOUNT_DISABLED', message: 'الحساب معطل' }, 403);
       }
 
-      // Update last login
       await sql`UPDATE users SET last_login = now() WHERE id = ${user.id}`;
 
       const token = generateToken(user.id, user.email, user.role);
@@ -132,7 +230,8 @@ export default async function handler(req) {
             full_name: user.full_name,
             role: user.role
           },
-          token
+          token,
+          schema: convertEmailToSchemaName(user.email)
         },
         message: 'تم تسجيل الدخول بنجاح'
       });
@@ -163,7 +262,10 @@ export default async function handler(req) {
 
       return jsonResponse({
         success: true,
-        data: users[0]
+        data: {
+          ...users[0],
+          schema: convertEmailToSchemaName(users[0].email)
+        }
       });
     }
 
@@ -177,7 +279,6 @@ export default async function handler(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح' }, 401);
       }
 
-      const body = await req.json();
       const { full_name } = body;
 
       await sql`
@@ -198,7 +299,6 @@ export default async function handler(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح' }, 401);
       }
 
-      const body = await req.json();
       const { current_password, new_password } = body;
 
       if (!current_password || !new_password) {
@@ -246,3 +346,8 @@ export default async function handler(req) {
     return jsonResponse({ success: false, error: 'SERVER_ERROR', message: 'حدث خطأ في الخادم' }, 500);
   }
 }
+
+export async function GET(req) { return await handleAllRequests(req); }
+export async function POST(req) { return await handleAllRequests(req); }
+export async function PUT(req) { return await handleAllRequests(req); }
+export async function OPTIONS() { return new Response(null, { status: 200, headers: corsHeaders }); }
