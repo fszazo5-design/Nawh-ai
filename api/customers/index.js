@@ -22,10 +22,20 @@ function verifyToken(authHeader) {
   } catch { return null; }
 }
 
-// دالة التحقق من الصلاحيات الموحدة
 function checkAuth(req) {
   const authHeader = req.headers.get('authorization');
   return verifyToken(authHeader);
+}
+
+// دالة مساعدة لقراءة الـ Body بأمان دون التسبب في خطأ 500
+async function getRequestBody(req) {
+  try {
+    const text = await req.text();
+    return text ? JSON.parse(text) : {};
+  } catch (err) {
+    console.error("Error parsing Request Body:", err);
+    return {};
+  }
 }
 
 // معالجة طلبات الجلب (GET)
@@ -47,7 +57,8 @@ export async function GET(req) {
     const data = await sql`SELECT * FROM customers ORDER BY created_at DESC`;
     return jsonResponse(data);
   } catch (error) { 
-    return jsonResponse({ error: 'SERVER_ERROR', message: error.message }, 500); 
+    console.error("GET Error:", error); // لطباعة الخطأ في سجلات Vercel
+    return jsonResponse({ error: 'SERVER_ERROR', message: error.message, details: error.stack }, 500); 
   }
 }
 
@@ -57,7 +68,7 @@ export async function POST(req) {
   const sql = getDb();
 
   try {
-    const body = await req.json();
+    const body = await getRequestBody(req); // قراءة آمنة هنا
     if (!body.name) return jsonResponse({ error: 'VALIDATION_ERROR', message: 'الاسم مطلوب' }, 400);
 
     const result = await sql`
@@ -67,7 +78,8 @@ export async function POST(req) {
     `;
     return jsonResponse(result[0], 201);
   } catch (error) { 
-    return jsonResponse({ error: 'SERVER_ERROR', message: error.message }, 500); 
+    console.error("POST Error:", error);
+    return jsonResponse({ error: 'SERVER_ERROR', message: error.message, details: error.stack }, 500); 
   }
 }
 
@@ -81,7 +93,7 @@ export async function PUT(req) {
   if (!id) return jsonResponse({ error: 'BAD_REQUEST', message: 'معرف العميل (id) مطلوب' }, 400);
 
   try {
-    const body = await req.json();
+    const body = await getRequestBody(req); // قراءة آمنة هنا
     const result = await sql`
       UPDATE customers SET
         name = COALESCE(${body.name}, name), 
@@ -97,7 +109,8 @@ export async function PUT(req) {
     `;
     return jsonResponse(result[0]);
   } catch (error) { 
-    return jsonResponse({ error: 'SERVER_ERROR', message: error.message }, 500); 
+    console.error("PUT Error:", error);
+    return jsonResponse({ error: 'SERVER_ERROR', message: error.message, details: error.stack }, 500); 
   }
 }
 
@@ -114,11 +127,11 @@ export async function DELETE(req) {
     await sql`DELETE FROM customers WHERE id = ${id}`;
     return jsonResponse({ message: 'تم الحذف بنجاح' });
   } catch (error) { 
-    return jsonResponse({ error: 'SERVER_ERROR', message: error.message }, 500); 
+    console.error("DELETE Error:", error);
+    return jsonResponse({ error: 'SERVER_ERROR', message: error.message, details: error.stack }, 500); 
   }
 }
 
-// معالجة طلبات الـ CORS Preflight (OPTIONS)
 export async function OPTIONS() {
   return new Response(null, { status: 200, headers: corsHeaders });
 }
