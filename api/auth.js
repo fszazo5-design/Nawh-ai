@@ -38,6 +38,7 @@ function verifyToken(token) {
   }
 }
 
+// دالة إرجاع الردود بصيغة JSON متوافقة مع إعدادات CORS
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -63,7 +64,6 @@ async function handleAllRequests(req) {
     let body = {};
     if (req.method === 'POST' || req.method === 'PUT') {
       try {
-        // محاولة قراءة النص أولاً وتحويله لـ JSON لتجنب تجمد الدالة
         const text = await req.text();
         body = text ? JSON.parse(text) : {};
       } catch (e) {
@@ -71,7 +71,9 @@ async function handleAllRequests(req) {
       }
     }
 
-    // Register
+    // ============================================
+    // Register - إنشاء الحساب والسكيمّا
+    // ============================================
     if (req.method === 'POST' && action === 'register') {
       const { email, password, full_name } = body;
 
@@ -99,12 +101,10 @@ async function handleAllRequests(req) {
 
       const user = result[0];
       const token = generateToken(user.id, user.email, user.role);
-
-      // === 💡 بدء كود إنشاء السكيمّا والجداول الخاصة بالإيميل تلقائياً ===
       const schemaName = convertEmailToSchemaName(email);
 
+      // === 💡 بدء كود إنشاء السكيمّا والجداول الخاصة بالإيميل تلقائياً ===
       try {
-        // استخدام unsafe لتمرير اسم السكيمّا الديناميكي بأمان
         await sql.unsafe(`
           -- 1. إنشاء السكيمّا الجديدة باسم العميل
           CREATE SCHEMA IF NOT EXISTS ${schemaName};
@@ -187,10 +187,10 @@ async function handleAllRequests(req) {
         `);
       } catch (schemaError) {
         console.error(`Failed to create schema for ${email}:`, schemaError);
-        // نكتفي بطباعة الخطأ لضمان عدم تعليق عملية التسجيل الأساسية إذا كانت السكيمّا موجودة مسبقاً
       }
       // === نهاية كود إنشاء السكيمّا ===
 
+      // إرسال الرد المتكامل والمغلف بنظام success ليتوافق مع الـ Auth الذكي في كود الخدمة
       return jsonResponse({
         success: true,
         data: { user, token, schema: schemaName },
@@ -198,7 +198,9 @@ async function handleAllRequests(req) {
       }, 201);
     }
 
-    // Login
+    // ============================================
+    // Login - تسجيل الدخول
+    // ============================================
     if (req.method === 'POST' && action === 'login') {
       const { email, password } = body;
 
@@ -237,7 +239,9 @@ async function handleAllRequests(req) {
       });
     }
 
-    // Get current user
+    // ============================================
+    // Get Current User (Me)
+    // ============================================
     if (req.method === 'GET' && action === 'me') {
       const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
@@ -269,7 +273,9 @@ async function handleAllRequests(req) {
       });
     }
 
-    // Update profile
+    // ============================================
+    // Update Profile
+    // ============================================
     if (req.method === 'PUT' && action === 'profile') {
       const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
@@ -289,7 +295,9 @@ async function handleAllRequests(req) {
       return jsonResponse({ success: true, message: 'تم تحديث الملف الشخصي' });
     }
 
-    // Change password
+    // ============================================
+    // Change Password
+    // ============================================
     if (req.method === 'PUT' && action === 'password') {
       const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
@@ -321,7 +329,9 @@ async function handleAllRequests(req) {
       return jsonResponse({ success: true, message: 'تم تحديث كلمة المرور بنجاح' });
     }
 
-    // List users (admin only)
+    // ============================================
+    // List Users (Admin only)
+    // ============================================
     if (req.method === 'GET' && action === 'users') {
       const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
@@ -336,7 +346,8 @@ async function handleAllRequests(req) {
         FROM users ORDER BY created_at DESC
       `;
 
-      return jsonResponse({ success: true, data: users });
+      // الرد بالـ JSON المباشر للمصفوفة ليتناسب مع دوال الجداول
+      return jsonResponse(users);
     }
 
     return jsonResponse({ success: false, error: 'NOT_FOUND', message: 'الإجراء غير موجود' }, 404);
