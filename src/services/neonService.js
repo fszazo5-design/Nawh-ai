@@ -121,11 +121,11 @@ function cacheData(key, data) {
 }
 
 // ============================================
-// Authentication API (روابط مستقلة للـ Auth)
+// Authentication API (تحديث الروابط لتتوافق مع الـ Action Query)
 // ============================================
 export const auth = {
   async register({ email, password, full_name }) {
-    const result = await request('https://nawh.vercel.app/api/auth/register', {
+    const result = await request('https://nawh.vercel.app/api/auth?action=register', {
       method: 'POST',
       body: JSON.stringify({ email, password, full_name })
     });
@@ -139,7 +139,7 @@ export const auth = {
   },
 
   async login({ email, password }) {
-    const result = await request('https://nawh.vercel.app/api/auth/login', {
+    const result = await request('https://nawh.vercel.app/api/auth?action=login', {
       method: 'POST',
       body: JSON.stringify({ email, password })
     });
@@ -159,7 +159,7 @@ export const auth = {
   },
 
   async getCurrentUser() {
-    const result = await request('https://nawh.vercel.app/api/auth/me');
+    const result = await request('https://nawh.vercel.app/api/auth?action=me');
 
     if (result.success) {
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(result.data));
@@ -169,14 +169,14 @@ export const auth = {
   },
 
   async updateProfile(data) {
-    return request('https://nawh.vercel.app/api/auth/profile', {
+    return request('https://nawh.vercel.app/api/auth?action=profile', {
       method: 'PUT',
       body: JSON.stringify(data)
     });
   },
 
   async changePassword(current_password, new_password) {
-    return request('https://nawh.vercel.app/api/auth/password', {
+    return request('https://nawh.vercel.app/api/auth?action=password', {
       method: 'PUT',
       body: JSON.stringify({ current_password, new_password })
     });
