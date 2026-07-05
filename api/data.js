@@ -3,6 +3,7 @@ import { getDb, initializeDatabase } from './_db.js';
 /**
  * Data API Endpoint
  * Unified Lightweight JSON API for all database operations.
+ * Optimized performance for Android client.
  */
 
 // CORS headers
@@ -12,20 +13,15 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// Response helper - Always returns standard structured JSON
+// Response helper - Returns clean, flat JSON data for tables to prevent Android lag
 function jsonResponse(data, status = 200) {
-  // للتأكد من أن البيانات مغلفة دائماً بـ success و data إذا لم تكن كذلك بالفعل
-  const responseBody = (data && data.hasOwnProperty('success')) 
-    ? data 
-    : { success: true, data: data };
-
-  return new Response(JSON.stringify(responseBody), {
+  return new Response(JSON.stringify(data), {
     status,
     headers: { 'Content-Type': 'application/json', ...corsHeaders }
   });
 }
 
-// Verify auth token
+// Verify auth token (نفس نظام التحقق الأصلي الخاص بك)
 function verifyToken(authHeader) {
   const token = authHeader?.replace('Bearer ', '');
   if (!token) return null;
@@ -85,6 +81,7 @@ export default async function handler(req) {
     }
   }
 
+  // الحفاظ الكامل على نظام أمان الحسابات وتسجيل الدخول
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
   const user = verifyToken(authHeader);
   if (!user && req.method !== 'GET') {
@@ -92,7 +89,7 @@ export default async function handler(req) {
   }
 
   try {
-    // === PRODUCTS ===
+    // === PRODUCTS (JSON صَافي ومباشر) ===
     if (table === 'products') {
       if (req.method === 'GET') {
         let productsData;
@@ -254,7 +251,7 @@ export default async function handler(req) {
             SELECT i.*, c.name as customer_name FROM invoices i
             LEFT JOIN customers c ON i.customer_id = c.id WHERE i.id = ${id}
           `;
-          if (invoices.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          if (invoices.length === 0) return jsonResponse({ error: 'NOT_FOUND' }, 404);
           return jsonResponse(invoices[0]);
         }
         const data = await sql`
@@ -313,7 +310,7 @@ export default async function handler(req) {
             SELECT p.*, s.name as supplier_name FROM purchases p
             LEFT JOIN suppliers s ON p.supplier_id = s.id WHERE p.id = ${id}
           `;
-          if (purchases.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          if (purchases.length === 0) return jsonResponse({ error: 'NOT_FOUND' }, 404);
           return jsonResponse(purchases[0]);
         }
         const data = await sql`
@@ -364,7 +361,7 @@ export default async function handler(req) {
             SELECT e.*, ec.name as category_name FROM expenses e
             LEFT JOIN expense_categories ec ON e.category_id = ec.id WHERE e.id = ${id}
           `;
-          if (expenses.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          if (expenses.length === 0) return jsonResponse({ error: 'NOT_FOUND' }, 404);
           return jsonResponse(expenses[0]);
         }
         const data = await sql`
@@ -386,11 +383,11 @@ export default async function handler(req) {
       }
     }
 
-    // === DASHBOARD STATS & RECENT INVOICES (المحرك الذكي الموحد) ===
+    // === DASHBOARD STATS & RECENT INVOICES ===
     if (action === 'dashboard' || table === 'dashboard') {
       const today = new Date().toISOString().slice(0, 10);
 
-      // 1. جلب الفواتير الأخيرة بشكل منفصل
+      // 1. الفواتير الأخيرة خفيفة ومباشرة
       if (filters.type === 'recent-invoices' || urlText.includes('recent')) {
         const limit = parseInt(filters.limit || 5);
         const recentInvoices = await sql`
@@ -400,7 +397,7 @@ export default async function handler(req) {
         return jsonResponse(recentInvoices); 
       }
 
-      // 2. جلب الإحصائيات الفردية
+      // 2. الإحصائيات الفردية
       if (filters.type === 'stats' || urlText.includes('stats')) {
         const todayStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'`;
         const totalStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count FROM invoices WHERE status != 'cancelled'`;
@@ -419,7 +416,7 @@ export default async function handler(req) {
         return jsonResponse(statsObj);
       }
 
-      // 3. الطلب الشامل المجمع (Fallback الأساسي)
+      // 3. الطلب الشامل المجمع
       const todayStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'`;
       const totalStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count FROM invoices WHERE status != 'cancelled'`;
       const purchaseTotal = await sql`SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'`;
@@ -440,11 +437,10 @@ export default async function handler(req) {
       });
     }
 
-    // === Remaining tables fallback to keep it brief ===
-    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE' }, 400);
+    return jsonResponse({ error: 'UNKNOWN_TABLE' }, 400);
 
   } catch (error) {
     console.error('Data API Error:', error);
-    return jsonResponse({ success: false, error: 'SERVER_ERROR', message: error.message }, 500);
+    return jsonResponse({ error: 'SERVER_ERROR', message: error.message }, 500);
   }
 }
