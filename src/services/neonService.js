@@ -544,7 +544,7 @@ export const whatsapp = {
   },
 
   async markSent(id) {
-    const result = await request(`https://nawh.vercel.app/api/whatsapp/queue/${id}/sent', {
+    const result = await request(`https://nawh.vercel.app/api/whatsapp/queue/${id}/sent`, {
       method: 'PUT'
     });
     return result.success;
