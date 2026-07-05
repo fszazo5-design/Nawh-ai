@@ -15,6 +15,12 @@ const STORAGE_KEYS = {
 };
 
 // ============================================
+// متغيرات الكاش الذكي المؤقت لمنع تكرار طلب الـ Dashboard في نفس اللحظة
+// ============================================
+let cachedDashboardData = null;
+let lastDashboardFetchTime = 0;
+
+// ============================================
 // Response Helper - المساعد الموحد لعمليات الـ Auth والأخطاء
 // ============================================
 const createResponse = (success, data = null, error = null, message = '') => ({
@@ -125,6 +131,7 @@ function cacheData(key, data) {
 
 function getCachedData(key) {
   const cache = JSON.parse(localStorage.getItem(STORAGE_KEYS.CACHE) || '{}');
+  cache[key] = cache[key] || null;
   const item = cache[key];
 
   if (!item) return null;
@@ -250,7 +257,6 @@ export const products = {
 
   async getByBarcode(barcode) {
     const result = await request(`https://nawh.vercel.app/api/data?table=products&barcode=${barcode}`);
-    // تعديل للتعامل مع الكائن المباشر الراجع من السيرفر المحدث
     return result.success ? result.data : null;
   },
 
@@ -609,17 +615,33 @@ export const audit = {
 };
 
 // ============================================
-// Dashboard Stats API
+// Dashboard Stats API (تم الدمج المساعد لمنع التكرار وحل الثقل)
 // ============================================
 export const dashboard = {
-  async getStats() {
+  // دالة داخلية مساعدة لجلب بيانات لوحة التحكم الموحدة مرة واحدة فقط وحفظها كاش لـ 3 ثوانٍ
+  async _getSharedDashboardData() {
+    const now = Date.now();
+    
+    // إذا كان الكاش موجوداً وتم طلبه منذ أقل من 3 ثوانٍ (لحظة تحميل الواجهة بالـ Promise.all)، نرجعه فوراً
+    if (cachedDashboardData && (now - lastDashboardFetchTime < 3000)) {
+      return cachedDashboardData;
+    }
+
     const result = await request('https://nawh.vercel.app/api/data?action=dashboard');
+    if (result.success) {
+      cachedDashboardData = result.data;
+      lastDashboardFetchTime = now;
+    }
+    return result;
+  },
+
+  async getStats() {
+    const result = await this._getSharedDashboardData();
 
     if (result.success && result.data?.stats) {
       return result.data.stats;
     }
 
-    // fallback للتعامل الذكي مع الكائن المباشر الراجع
     return result.success ? result.data?.stats || result.data : {
       todaySales: 0,
       todayCount: 0,
@@ -631,7 +653,7 @@ export const dashboard = {
   },
 
   async getRecentInvoices(limit = 5) {
-    const result = await request('https://nawh.vercel.app/api/data?action=dashboard');
+    const result = await this._getSharedDashboardData();
 
     if (result.success) {
       const recent = result.data?.recentInvoices || result.data;
