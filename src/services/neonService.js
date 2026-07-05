@@ -15,7 +15,7 @@ const STORAGE_KEYS = {
 };
 
 // ============================================
-// Response Helper - Unified JSON Payload
+// Response Helper - المساعد الموحد لعمليات الـ Auth والأخطاء
 // ============================================
 const createResponse = (success, data = null, error = null, message = '') => ({
   success,
@@ -52,7 +52,12 @@ async function request(fullUrl, options = {}) {
       return createResponse(false, null, result?.error || 'HTTP_ERROR', result?.message || 'حدث خطأ في الاتصال');
     }
 
-    return createResponse(true, result?.data, null, result?.message);
+    // هنا تكمن المرونة: إذا كان الرد قادماً من الـ Auth ومغلفاً بـ success نمرره كما هو، وإلا نعتبر الرد هو الـ JSON الصافي مباشرة
+    if (result && result.hasOwnProperty('success')) {
+      return result;
+    }
+
+    return createResponse(true, result, null, '');
   } catch (err) {
     // Network error - queue for offline sync
     if (!navigator.onLine && options.method !== 'GET') {
@@ -131,7 +136,7 @@ function getCachedData(key) {
 }
 
 // ============================================
-// Authentication API
+// Authentication API (تم الإبقاء على نفس نظام نقل وحفظ البيانات بالكامل)
 // ============================================
 export const auth = {
   async register({ email, password, full_name }) {
@@ -218,7 +223,7 @@ export const auth = {
 };
 
 // ============================================
-// Products API
+// Products API (نظام فك وقراءة البيانات المباشر JSON)
 // ============================================
 export const products = {
   async getAll(filters = {}) {
@@ -245,7 +250,8 @@ export const products = {
 
   async getByBarcode(barcode) {
     const result = await request(`https://nawh.vercel.app/api/data?table=products&barcode=${barcode}`);
-    return result.success ? result.data?.[0] || null : null;
+    // تعديل للتعامل مع الكائن المباشر الراجع من السيرفر المحدث
+    return result.success ? result.data : null;
   },
 
   async create(data) {
@@ -609,11 +615,12 @@ export const dashboard = {
   async getStats() {
     const result = await request('https://nawh.vercel.app/api/data?action=dashboard');
 
-    if (result.success) {
+    if (result.success && result.data?.stats) {
       return result.data.stats;
     }
 
-    return {
+    // fallback للتعامل الذكي مع الكائن المباشر الراجع
+    return result.success ? result.data?.stats || result.data : {
       todaySales: 0,
       todayCount: 0,
       totalRevenue: 0,
@@ -627,7 +634,8 @@ export const dashboard = {
     const result = await request('https://nawh.vercel.app/api/data?action=dashboard');
 
     if (result.success) {
-      return result.data.recentInvoices.slice(0, limit);
+      const recent = result.data?.recentInvoices || result.data;
+      return Array.isArray(recent) ? recent.slice(0, limit) : [];
     }
 
     return [];
