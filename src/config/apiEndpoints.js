@@ -1,127 +1,131 @@
 /**
  * API Endpoints Configuration
- * Centralized API routes for ERP System
- * All endpoints are relative to API_BASE URL
+ * =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+ * روابط API الثابتة لنظام ERP
+ * يتم استخدامها مع CapacitorHttp في الأندرويد
  */
 
-// API Base URL - يتم读取 من متغيرات البيئة
-export const API_BASE = import.meta.env.VITE_API_URL || '/api';
+// ============================================
+// Base URL - الرابط الأساسي
+// ============================================
+export const API_BASE = 'https://nawh.vercel.app/api';
 
 // ============================================
-// Auth Endpoints
+// Auth Endpoints - روابط المصادقة
 // ============================================
 export const AUTH_ENDPOINTS = {
-  // تسجيل مستخدم جديد
-  REGISTER: '/auth?action=register',
-  // تسجيل الدخول
-  LOGIN: '/auth?action=login',
-  // جلب بيانات المستخدم الحالي
-  ME: '/auth?action=me',
-  // تحديث الملف الشخصي
-  UPDATE_PROFILE: '/auth?action=profile',
-  // تغيير كلمة المرور
-  CHANGE_PASSWORD: '/auth?action=password',
-  // جلب جميع المستخدمين (للمدير فقط)
-  LIST_USERS: '/auth?action=users',
+  /** تسجيل الدخول */
+  LOGIN: `${API_BASE}/auth?action=login`,
+
+  /** إنشاء حساب جديد */
+  REGISTER: `${API_BASE}/auth?action=register`,
+
+  /** جلب بيانات المستخدم الحالي */
+  ME: `${API_BASE}/auth?action=me`,
+
+  /** تعديل الملف الشخصي */
+  PROFILE: `${API_BASE}/auth?action=profile`,
+
+  /** تغيير كلمة المرور */
+  PASSWORD: `${API_BASE}/auth?action=password`,
+
+  /** جلب المستخدمين (للمدير) */
+  USERS: `${API_BASE}/auth?action=users`,
 };
 
 // ============================================
-// Data Table Endpoints
+// Data Endpoints - روابط البيانات
 // ============================================
 export const DATA_ENDPOINTS = {
-  // المنتجات
-  PRODUCTS: '/data?table=products',
-  PRODUCT_BY_ID: (id) => `/data?table=products&id=${id}`,
-  PRODUCT_BY_BARCODE: (barcode) => `/data?table=products&barcode=${barcode}`,
+  /** لوحة التحكم والإحصائيات */
+  DASHBOARD: `${API_BASE}/data?table=dashboard`,
 
-  // العملاء
-  CUSTOMERS: '/data?table=customers',
-  CUSTOMER_BY_ID: (id) => `/data?table=customers&id=${id}`,
+  /** المنتجات */
+  PRODUCTS: `${API_BASE}/data?table=products`,
 
-  // الموردين
-  SUPPLIERS: '/data?table=suppliers',
-  SUPPLIER_BY_ID: (id) => `/data?table=suppliers&id=${id}`,
+  /** العملاء */
+  CUSTOMERS: `${API_BASE}/data?table=customers`,
 
-  // الفواتير
-  INVOICES: '/data?table=invoices',
-  INVOICE_BY_ID: (id) => `/data?table=invoices&id=${id}`,
-  INVOICE_ITEMS: (invoiceId) => `/data?table=invoice_items&invoice_id=${invoiceId}`,
+  /** الموردين */
+  SUPPLIERS: `${API_BASE}/data?table=suppliers`,
 
-  // المشتريات
-  PURCHASES: '/data?table=purchases',
-  PURCHASE_BY_ID: (id) => `/data?table=purchases&id=${id}`,
-  PURCHASE_ITEMS: (purchaseId) => `/data?table=purchase_items&purchase_id=${purchaseId}`,
+  /** الفواتير */
+  INVOICES: `${API_BASE}/data?table=invoices`,
 
-  // المصروفات
-  EXPENSES: '/data?table=expenses',
-  EXPENSE_BY_ID: (id) => `/data?table=expenses&id=${id}`,
-  EXPENSE_CATEGORIES: '/data?table=expense_categories',
+  /** عناصر الفواتير */
+  INVOICE_ITEMS: `${API_BASE}/data?table=invoice-items`,
 
-  // قائمة WhatsApp
-  WHATSAPP_QUEUE: '/data?table=whatsapp_queue',
-  WHATSAPP_PENDING: '/data?table=whatsapp_queue&status=pending',
-  WHATSAPP_BY_ID: (id) => `/data?table=whatsapp_queue&id=${id}`,
+  /** المشتريات */
+  PURCHASES: `${API_BASE}/data?table=purchases`,
 
-  // سجل المراجعة
-  AUDIT_LOG: '/data?table=audit_log',
+  /** المصاريف */
+  EXPENSES: `${API_BASE}/data?table=expenses`,
 
-  // قائمة المزامنة
-  SYNC_QUEUE: '/data?table=sync_queue',
-  SYNC_PENDING: '/data?table=sync_queue&pending=true',
+  /** تصنيفات المصاريف */
+  EXPENSE_CATEGORIES: `${API_BASE}/data?table=expense-categories`,
+
+  /** رسائل الواتساب */
+  WHATSAPP: `${API_BASE}/data?table=whatsapp`,
+
+  /** تهيئة قاعدة البيانات */
+  INIT_DB: `${API_BASE}/data?table=init-db`,
 };
 
 // ============================================
-// Action Endpoints
-// ============================================
-export const ACTION_ENDPOINTS = {
-  // تهيئة قاعدة البيانات
-  INIT_DB: '/data?action=init-db',
-  // لوحة التحكم والإحصائيات
-  DASHBOARD: '/data?action=dashboard',
-};
-
-// ============================================
-// Helper Functions
+// Helper Functions - دوال مساعدة
 // ============================================
 
 /**
- * بناء رابط كامل مع فلتر
- * @param {string} endpoint - نقطة النهاية
- * @param {object} filters - معاملات الفلتر
- * @returns {string} الرابط الكامل
+ * إضافة مُعامل ID للرابط
+ * @param {string} endpoint - الرابط الأساسي
+ * @param {string} id - المعرف
+ * @returns {string} الرابط مع ID
+ *
+ * مثال: addId(DATA_ENDPOINTS.PRODUCTS, '123')
+ * النتيجة: 'https://nawh.vercel.app/api/data?table=products&id=123'
  */
-export function buildUrl(endpoint, filters = {}) {
-  const params = new URLSearchParams();
-
-  // استخراج الـ table و action من الـ endpoint إذا موجودين
-  const url = new URL(endpoint, 'http://dummy.com');
-  for (const [key, value] of url.searchParams.entries()) {
-    params.set(key, value);
-  }
-
-  // إضافة الفلاتر الإضافية
-  Object.entries(filters).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
-      params.set(key, value);
-    }
-  });
-
-  const basePath = endpoint.split('?')[0];
-  const queryString = params.toString();
-  return queryString ? `${basePath}?${queryString}` : basePath;
+export function addId(endpoint, id) {
+  if (!id) return endpoint;
+  return `${endpoint}&id=${id}`;
 }
 
 /**
- * بناء رابط البحث
- * @param {string} table - اسم الجدول
+ * إضافة مُعامل البحث للرابط
+ * @param {string} endpoint - الرابط الأساسي
  * @param {string} search - نص البحث
- * @returns {string} الرابط مع معامل البحث
+ * @returns {string} الرابط مع البحث
  */
-export function buildSearchUrl(table, search = '') {
-  const params = new URLSearchParams();
-  params.set('table', table);
-  if (search) params.set('search', search);
-  return `/data?${params.toString()}`;
+export function addSearch(endpoint, search) {
+  if (!search) return endpoint;
+  return `${endpoint}&search=${encodeURIComponent(search)}`;
+}
+
+/**
+ * إضافة مُعامل الفلتر للرابط
+ * @param {string} endpoint - الرابط الأساسي
+ * @param {string} key - اسم المعامل
+ * @param {string|number|boolean} value - القيمة
+ * @returns {string} الرابط مع الفلتر
+ */
+export function addParam(endpoint, key, value) {
+  if (value === undefined || value === null || value === '') return endpoint;
+  return `${endpoint}&${key}=${encodeURIComponent(value)}`;
+}
+
+/**
+ * إضافة عدة معاملات للرابط
+ * @param {string} endpoint - الرابط الأساسي
+ * @param {object} params - المعاملات
+ * @returns {string} الرابط مع المعاملات
+ */
+export function addParams(endpoint, params = {}) {
+  let url = endpoint;
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      url += `&${key}=${encodeURIComponent(value)}`;
+    }
+  }
+  return url;
 }
 
 // ============================================
@@ -131,7 +135,8 @@ export default {
   API_BASE,
   AUTH_ENDPOINTS,
   DATA_ENDPOINTS,
-  ACTION_ENDPOINTS,
-  buildUrl,
-  buildSearchUrl,
+  addId,
+  addSearch,
+  addParam,
+  addParams,
 };
