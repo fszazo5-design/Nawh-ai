@@ -39,7 +39,8 @@
     "@capacitor/preferences": "^6.0.0",
     "@capacitor-community/sqlite": "^6.0.0",
     "@capacitor-community/fcm": "^6.0.0",
-    "fast-xml-parser": "^4.3.5"
+    "fast-xml-parser": "^4.3.5",
+    "@neondatabase/serverless": "^0.9.0"
   },
   "devDependencies": {
     "firebase-admin": "^12.0.0",
