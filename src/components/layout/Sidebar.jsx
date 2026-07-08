@@ -2,24 +2,29 @@ import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, ShoppingCart, Package, ShoppingBag,
   TrendingUp, DollarSign, Settings, ChevronLeft, Zap,
-  Users, Truck, LogOut
+  Users, Truck, LogOut, Boxes, MessageCircle, Plus
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext.jsx'
+import { useShift } from '../../context/ShiftContext.jsx'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'الرئيسية' },
+  { to: '/invoices/new', icon: Plus, label: 'فاتورة جديدة' },
   { to: '/invoices', icon: ShoppingCart, label: 'الفواتير' },
   { to: '/products', icon: Package, label: 'المنتجات' },
+  { to: '/inventory', icon: Boxes, label: 'المخزون' },
   { to: '/customers', icon: Users, label: 'العملاء' },
   { to: '/suppliers', icon: Truck, label: 'الموردين' },
   { to: '/purchases', icon: ShoppingBag, label: 'المشتريات' },
   { to: '/expenses', icon: DollarSign, label: 'المصروفات' },
+  { to: '/whatsapp', icon: MessageCircle, label: 'التواصل' },
   { to: '/reports', icon: TrendingUp, label: 'التقارير' },
   { to: '/settings', icon: Settings, label: 'الإعدادات' },
 ]
 
 export default function Sidebar({ isOpen, onClose }) {
   const { user, logout } = useAuth()
+  const { currentShift, isShiftOpen } = useShift()
 
   async function handleLogout() {
     await logout()
@@ -100,6 +105,14 @@ export default function Sidebar({ isOpen, onClose }) {
               <p className="text-blue-300 text-xs capitalize">{user.role === 'admin' ? 'مدير' : user.role === 'manager' ? 'مشرف' : 'مستخدم'}</p>
             </div>
           )}
+
+          {/* Shift Status */}
+          <div className={`px-3 py-2 mb-2 rounded-lg ${isShiftOpen ? 'bg-emerald-500/20' : 'bg-amber-500/20'}`}>
+            <p className={`text-xs font-medium ${isShiftOpen ? 'text-emerald-300' : 'text-amber-300'}`}>
+              {isShiftOpen ? 'وردي مفتوحة' : 'لا وردية مفتوحة'}
+            </p>
+          </div>
+
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 px-4 py-2.5 w-full rounded-lg text-blue-200 hover:bg-white/10 hover:text-white transition-colors text-sm"
