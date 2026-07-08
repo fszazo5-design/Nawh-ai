@@ -1,8 +1,8 @@
 import { getDb } from './_db.js';
 
 /**
- * Auth API Endpoint (Vercel Web Fetch API Style)
- * متوافق تماماً مع مشاريع Vite و منصات الأندرويد
+ * Auth API Endpoint (Vercel Node.js Serverless Compliant)
+ * متوافق تماماً مع مشاريع Vite و منصات الأندرويد (Capacitor)
  */
 
 // CORS headers
@@ -50,17 +50,18 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// الدالة الرئيسية الموحدة التي تصدر كـ default لتستقبل طلب الـ Fetch القياسي من Vercel
+// الدالة الرئيسية الموحدة التي تصدر كـ default لتستقبل الطلب من Vercel
 export default async function handler(req) {
   // 1. معالجة طلبات OPTIONS الخاصة بـ CORS (مهم جداً للأندرويد و Vite)
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
+  // التأكد من وجود رابط قاعدة البيانات في البيئة، أو تمريره كحماية افتراضية
+  const dbUrl = process.env.DATABASE_URL;
   const sql = getDb();
   
-  // 2. قراءة الهيدرز والروابط باستخدام Web API القياسي (req.headers.get)
-  // إذا كانت البيئة لا تدعم .get()، نضع حماية بديلة للـ Object العادي لضمان عدم توقف الكود
+  // 2. قراءة الهيدرز والروابط باستخدام معالج آمن لكائنات Node العادية والـ Web APIs
   const host = typeof req.headers.get === 'function' 
     ? req.headers.get('host') 
     : (req.headers?.host || 'localhost');
@@ -74,9 +75,24 @@ export default async function handler(req) {
   const id = url.searchParams.get('id'); 
 
   try {
+    // 3. الحل البديل والآمن لقراءة الـ Body وتفادي خطأ (req.json is not a function)
+    let body = {};
+    if (req.method === 'POST' || req.method === 'PUT') {
+      if (typeof req.json === 'function') {
+        body = await req.json();
+      } else {
+        // إذا كان كائن طلب Node.js تقليدي (IncomingMessage)، نقوم بتجميع الـ Chunks
+        const buffers = [];
+        for await (const chunk of req) {
+          buffers.push(chunk);
+        }
+        const data = Buffer.concat(buffers).toString();
+        body = data ? JSON.parse(data) : {};
+      }
+    }
+
     // === [ POST Requests: Login & Register ] ===
     if (req.method === 'POST') {
-      const body = await req.json();
 
       // إرسال بيانات التسجيل
       if (action === 'register') {
@@ -180,7 +196,6 @@ export default async function handler(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح' }, 401);
       }
 
-      const body = await req.json();
       const targetUserId = id || payload.userId;
 
       if (action === 'profile') {
