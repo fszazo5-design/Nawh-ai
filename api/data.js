@@ -68,8 +68,8 @@ export default async function handler(req) {
   const id = url.searchParams.get('id');
   const action = url.searchParams.get('action');
 
-  // Initialize database endpoint
-  if (action === 'init-db') {
+  // Initialize database endpoint (ضبط استلام تهيئة قاعدة البيانات عبر الـ table والـ action)
+  if (action === 'init-db' || table === 'init-db') {
     try {
       const result = await initializeDatabase();
       return jsonResponse(result);
@@ -320,7 +320,7 @@ export default async function handler(req) {
     }
 
     // === INVOICE ITEMS ===
-    if (table === 'invoice_items') {
+    if (table === 'invoice-items' || table === 'invoice_items') {
       if (req.method === 'GET') {
         const invoiceId = url.searchParams.get('invoice_id');
         if (invoiceId) {
@@ -475,15 +475,15 @@ export default async function handler(req) {
     }
 
     // === EXPENSE CATEGORIES ===
-    if (table === 'expense_categories') {
+    if (table === 'expense-categories' || table === 'expense_categories') {
       if (req.method === 'GET') {
         const data = await sql`SELECT * FROM expense_categories ORDER BY name`;
         return jsonResponse({ success: true, data });
       }
     }
 
-    // === WHATSAPP QUEUE ===
-    if (table === 'whatsapp_queue') {
+    // === WHATSAPP QUEUE (تم ضبطه لاستلام معامل whatsapp المتوافق مع الـ Frontend) ===
+    if (table === 'whatsapp' || table === 'whatsapp_queue') {
       if (req.method === 'GET') {
         const status = url.searchParams.get('status');
         if (status === 'pending') {
@@ -521,8 +521,8 @@ export default async function handler(req) {
       }
     }
 
-    // === DASHBOARD STATS ===
-    if (action === 'dashboard') {
+    // === DASHBOARD STATS (ضبط معالجة لوحة البيانات سواء أرسلت كـ table أو action) ===
+    if (action === 'dashboard' || table === 'dashboard') {
       const today = new Date().toISOString().slice(0, 10);
 
       const todayStats = await sql`
