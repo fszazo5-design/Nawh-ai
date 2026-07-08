@@ -50,16 +50,10 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// الدالة الرئيسية الموحدة التي تصدر كـ default لتستقبل طلب الـ Fetch القياسي من Vercel
-export default async function handler(req) {
-  // 1. معالجة طلبات OPTIONS الخاصة بـ CORS (مهم جداً للأندرويد و Vite)
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
-
+// الدالة الرئيسية الموحدة لمعالجة العمليات
+async function handleRequest(req) {
   const sql = getDb();
   
-  // 2. قراءة الهيدرز والروابط باستخدام Web API القياسي (req.headers.get)
   const host = typeof req.headers.get === 'function' 
     ? req.headers.get('host') 
     : (req.headers?.host || 'localhost');
@@ -92,7 +86,6 @@ export default async function handler(req) {
           return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل' }, 400);
         }
 
-        // توليد معرّف UUID متوافق تماماً مع حقل الـ UUID في قاعدة البيانات
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
 
@@ -222,4 +215,12 @@ export default async function handler(req) {
     console.error('Auth API Error:', error);
     return jsonResponse({ success: false, error: 'SERVER_ERROR', message: error.message }, 500);
   }
+}
+
+// === [ التصدير المتوافق مع معايير Vercel المحدثة (Web Fetch Style) ] ===
+export async function GET(request) { return await handleRequest(request); }
+export async function POST(request) { return await handleRequest(request); }
+export async function PUT(request) { return await handleRequest(request); }
+export async function OPTIONS() { 
+  return new Response(null, { status: 200, headers: corsHeaders }); 
 }
