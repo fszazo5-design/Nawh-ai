@@ -49,7 +49,7 @@ function generatePurchaseNumber() {
 
 // Parse query filters
 function parseFilters(url) {
-  const params = new URL(url).searchParams;
+  const params = url.searchParams;
   const filters = {};
   for (const [key, value] of params.entries()) {
     if (value) filters[key] = value;
@@ -63,7 +63,12 @@ export default async function handler(req) {
   }
 
   const sql = getDb();
-  const url = new URL(req.url);
+  
+  // تعديل معالجة الرابط لتجنب خطأ الروابط النسبية (Relative URL Error) في بيئات الـ Serverless
+  const url = req.url.startsWith('http') 
+    ? new URL(req.url) 
+    : new URL(req.url, `https://${req.headers.get('host') || 'localhost'}`);
+    
   const table = url.searchParams.get('table');
   const id = url.searchParams.get('id');
   const action = url.searchParams.get('action');
