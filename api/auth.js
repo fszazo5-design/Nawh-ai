@@ -15,7 +15,7 @@ const corsHeaders = {
 // Simple hash function (for production use bcrypt)
 async function hashPassword(password) {
   const encoder = new TextEncoder();
-  const data = encoder.encode(password + process.env.AUTH_SECRET || 'nawh-secret-key');
+  const data = encoder.encode(password + (process.env.AUTH_SECRET || 'nawh-secret-key'));
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
@@ -57,10 +57,14 @@ export default async function handler(req) {
 
   const sql = getDb();
   
-  // تعديل معالجة الرابط لتجنب خطأ الروابط النسبية (Relative URL Error) في بيئات الـ Serverless
+  // استخراج الهيدرز بطريقة متوافقة مع الأندرويد والـ Node Serverless بيقين تامة
+  const host = req.headers?.host || req.headers?.['host'] || 'localhost';
+  const authHeader = req.headers?.authorization || req.headers?.['authorization'];
+
+  // تعديل معالجة الرابط لتجنب خطأ الروابط النسبية (Relative URL Error)
   const url = req.url.startsWith('http') 
     ? new URL(req.url) 
-    : new URL(req.url, `https://${req.headers.get('host') || 'localhost'}`);
+    : new URL(req.url, `https://${host}`);
   
   // استلام المتغيرات الثابتة القادمة تماماً كما تم إرسالها من الـ Frontend
   const action = url.searchParams.get('action') || 'me';
@@ -147,7 +151,6 @@ export default async function handler(req) {
 
     // Get current user
     if (req.method === 'GET' && action === 'me') {
-      const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
 
       if (!token) {
@@ -176,7 +179,6 @@ export default async function handler(req) {
 
     // Update profile
     if (req.method === 'PUT' && action === 'profile') {
-      const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
@@ -200,7 +202,6 @@ export default async function handler(req) {
 
     // Change password
     if (req.method === 'PUT' && action === 'password') {
-      const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
@@ -234,7 +235,6 @@ export default async function handler(req) {
 
     // List users (admin only)
     if (req.method === 'GET' && action === 'users') {
-      const authHeader = req.headers.get('authorization');
       const token = authHeader?.replace('Bearer ', '');
 
       const payload = verifyToken(token);
