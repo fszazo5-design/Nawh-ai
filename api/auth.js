@@ -57,7 +57,10 @@ export default async function handler(req) {
 
   const sql = getDb();
   const url = new URL(req.url);
+  
+  // استلام المتغيرات الثابتة القادمة تماماً كما تم إرسالها من الـ Frontend
   const action = url.searchParams.get('action') || 'me';
+  const id = url.searchParams.get('id'); // متاح في حال إرسال معرف مستخدم للأندرويد
 
   try {
     // Register
@@ -180,9 +183,12 @@ export default async function handler(req) {
       const body = await req.json();
       const { full_name } = body;
 
+      // استخدام الـ id الممرر إذا وُجد، أو الـ id المستخلص من التوكن تلقائياً لتوافق الأندرويد
+      const targetUserId = id || payload.userId;
+
       await sql`
         UPDATE users SET full_name = ${full_name}, updated_at = now()
-        WHERE id = ${payload.userId}
+        WHERE id = ${targetUserId}
       `;
 
       return jsonResponse({ success: true, message: 'تم تحديث الملف الشخصي' });
@@ -205,7 +211,8 @@ export default async function handler(req) {
         return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور الحالية والجديدة مطلوبتان' }, 400);
       }
 
-      const users = await sql`SELECT password_hash FROM users WHERE id = ${payload.userId}`;
+      const targetUserId = id || payload.userId;
+      const users = await sql`SELECT password_hash FROM users WHERE id = ${targetUserId}`;
       const user = users[0];
 
       if (!await verifyPassword(current_password, user.password_hash)) {
@@ -215,7 +222,7 @@ export default async function handler(req) {
       const newPasswordHash = await hashPassword(new_password);
       await sql`
         UPDATE users SET password_hash = ${newPasswordHash}, updated_at = now()
-        WHERE id = ${payload.userId}
+        WHERE id = ${targetUserId}
       `;
 
       return jsonResponse({ success: true, message: 'تم تحديث كلمة المرور بنجاح' });
