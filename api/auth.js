@@ -56,7 +56,11 @@ export default async function handler(req) {
   }
 
   const sql = getDb();
-  const url = new URL(req.url);
+  
+  // تعديل معالجة الرابط لتجنب خطأ الروابط النسبية (Relative URL Error) في بيئات الـ Serverless
+  const url = req.url.startsWith('http') 
+    ? new URL(req.url) 
+    : new URL(req.url, `https://${req.headers.get('host') || 'localhost'}`);
   
   // استلام المتغيرات الثابتة القادمة تماماً كما تم إرسالها من الـ Frontend
   const action = url.searchParams.get('action') || 'me';
