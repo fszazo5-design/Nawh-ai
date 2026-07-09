@@ -7,7 +7,15 @@
 
 import { Preferences } from '@capacitor/preferences';
 import { CapacitorHttp } from '@capacitor/core';
-import { API_BASE, AUTH_ENDPOINTS, DATA_ENDPOINTS, addId } from '../config/apiEndpoints.js';
+
+// Base API URL - must match apiEndpoints.js
+const API_BASE = 'https://nawh.vercel.app/api';
+
+// Helper function to add ID parameter
+function addId(endpoint, id) {
+  if (!id) return endpoint;
+  return `${endpoint}&id=${id}`;
+}
 
 // Storage Keys
 const SYNC_KEYS = {
