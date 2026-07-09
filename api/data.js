@@ -1,8 +1,9 @@
 import { getDb, initializeDatabase } from './_db.js';
 
 /**
- * Data API Endpoint
+ * Data API Endpoint (Vercel Web Fetch API Style)
  * Unified API for all database operations: products, customers, suppliers, invoices, etc.
+ * متوافق تماماً مع معايير الويب ومعالج الـ Fetch في Vercel
  */
 
 // CORS headers
@@ -12,7 +13,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// Response helper
+// Response helper المتوافق مع معايير الويب الحديثة
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -47,105 +48,89 @@ function generatePurchaseNumber() {
   return `PO-${date}-${random}`;
 }
 
-// Parse query filters
-function parseFilters(url) {
-  const params = new URL(url).searchParams;
-  const filters = {};
-  for (const [key, value] of params.entries()) {
-    if (value) filters[key] = value;
-  }
-  return filters;
-}
-
-export default async function handler(req) {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
-
+// الدالة الرئيسية الموحدة لمعالجة كافة الطلبات والمداول للـ ERP
+async function handleRequest(req) {
   const sql = getDb();
-  const url = new URL(req.url);
+
+  const host = typeof req.headers.get === 'function' ? req.headers.get('host') : (req.headers?.host || 'localhost');
+  const authHeader = typeof req.headers.get === 'function' ? req.headers.get('authorization') : (req.headers?.authorization);
+
+  const url = new URL(req.url, `https://${host}`);
   const table = url.searchParams.get('table');
   const id = url.searchParams.get('id');
   const action = url.searchParams.get('action');
 
-  // Initialize database endpoint
-  if (action === 'init-db') {
-    try {
-      const result = await initializeDatabase();
-      return jsonResponse(result);
-    } catch (error) {
-      return jsonResponse({ success: false, error: error.message }, 500);
-    }
-  }
-
-  // Auth check for protected routes
-  const authHeader = req.headers.get('authorization');
-  const user = verifyToken(authHeader);
-  if (!user && req.method !== 'GET') {
-    return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'غير مصرح' }, 401);
-  }
-
   try {
-    // === PRODUCTS ===
+    // 1. تهيئة قاعدة البيانات عند استدعاء الـ init-db
+    if (action === 'init-db' || table === 'init-db') {
+      try {
+        const result = await initializeDatabase();
+        return jsonResponse(result);
+      } catch (error) {
+        return jsonResponse({ success: false, error: error.message }, 500);
+      }
+    }
+
+    // التحقق من صلاحية التوكن للعمليات الحساسة (عدا الـ GET)
+    const user = verifyToken(authHeader);
+    if (!user && req.method !== 'GET') {
+      return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'غير مصرح للقيام بهذه العملية' }, 401);
+    }
+
+    // قراءة الـ body تلقائياً من الـ Web Request
+    let body = {};
+    if (req.method === 'POST' || req.method === 'PUT') {
+      body = await req.json().catch(() => ({}));
+    }
+
+    // ==========================================
+    // === [ PRODUCTS ] ===
+    // ==========================================
     if (table === 'products') {
       if (req.method === 'GET') {
-        const filters = parseFilters(url);
-        let query = sql`SELECT * FROM products WHERE 1=1`;
+        const category = url.searchParams.get('category');
+        const barcode = url.searchParams.get('barcode');
+        const search = url.searchParams.get('search');
+        const is_active = url.searchParams.get('is_active');
 
-        if (filters.category) {
-          query = sql`SELECT * FROM products WHERE category = ${filters.category}`;
+        let rows = [];
+        if (category) {
+          rows = await sql`SELECT * FROM products WHERE category = ${category}`;
+        } else if (barcode) {
+          rows = await sql`SELECT * FROM products WHERE barcode = ${barcode} LIMIT 1`;
+        } else if (search) {
+          const searchParam = `%${search}%`;
+          rows = await sql`SELECT * FROM products WHERE name ILIKE ${searchParam} OR barcode ILIKE ${searchParam} ORDER BY created_at DESC`;
+        } else if (is_active !== null && is_active !== undefined) {
+          const activeBool = is_active === 'true';
+          rows = await sql`SELECT * FROM products WHERE is_active = ${activeBool} ORDER BY created_at DESC`;
+        } else {
+          rows = await sql`SELECT * FROM products ORDER BY created_at DESC`;
         }
-        if (filters.barcode) {
-          query = sql`SELECT * FROM products WHERE barcode = ${filters.barcode} LIMIT 1`;
-        }
-        if (filters.search) {
-          query = sql`
-            SELECT * FROM products
-            WHERE name ILIKE ${'%' + filters.search + '%'}
-               OR barcode ILIKE ${'%' + filters.search + '%'}
-            ORDER BY created_at DESC
-          `;
-        }
-        if (filters.is_active !== undefined) {
-          query = sql`SELECT * FROM products WHERE is_active = ${filters.is_active === 'true'} ORDER BY created_at DESC`;
-        }
-        if (!filters.category && !filters.barcode && !filters.search && !filters.is_active) {
-          query = sql`SELECT * FROM products ORDER BY created_at DESC`;
-        }
-
-        return jsonResponse({ success: true, data: query });
+        return jsonResponse({ success: true, data: rows });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
+        const pId = crypto.randomUUID();
         const result = await sql`
-          INSERT INTO products (name, barcode, category, unit, cost_price, sell_price, stock_qty, min_stock_qty, is_active, image_url, notes)
-          VALUES (${body.name}, ${body.barcode || null}, ${body.category || null}, ${body.unit || 'قطعة'},
-                  ${body.cost_price || 0}, ${body.sell_price || 0}, ${body.stock_qty || 0}, ${body.min_stock_qty || 0},
-                  ${body.is_active ?? true}, ${body.image_url || null}, ${body.notes || null})
-          RETURNING *
+          INSERT INTO products (id, name, barcode, category, unit, cost_price, sell_price, stock_qty, min_stock_qty, is_active, image_url, notes)
+          VALUES (
+            ${pId}, ${body.name}, ${body.barcode || null}, ${body.category || null}, ${body.unit || 'قطعة'},
+            ${body.cost_price || 0}, ${body.sell_price || 0}, ${body.stock_qty || 0}, ${body.min_stock_qty || 0},
+            ${body.is_active ?? true}, ${body.image_url || null}, ${body.notes || null}
+          ) RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] }, 201);
       }
 
       if (req.method === 'PUT' && id) {
-        const body = await req.json();
         const result = await sql`
           UPDATE products SET
-            name = COALESCE(${body.name}, name),
-            barcode = COALESCE(${body.barcode}, barcode),
-            category = COALESCE(${body.category}, category),
-            unit = COALESCE(${body.unit}, unit),
-            cost_price = COALESCE(${body.cost_price}, cost_price),
-            sell_price = COALESCE(${body.sell_price}, sell_price),
-            stock_qty = COALESCE(${body.stock_qty}, stock_qty),
-            min_stock_qty = COALESCE(${body.min_stock_qty}, min_stock_qty),
-            is_active = COALESCE(${body.is_active}, is_active),
-            image_url = COALESCE(${body.image_url}, image_url),
-            notes = COALESCE(${body.notes}, notes),
-            updated_at = now()
-          WHERE id = ${id}
-          RETURNING *
+            name = COALESCE(${body.name ?? null}, name), barcode = COALESCE(${body.barcode ?? null}, barcode), category = COALESCE(${body.category ?? null}, category),
+            unit = COALESCE(${body.unit ?? null}, unit), cost_price = COALESCE(${body.cost_price ?? null}, cost_price), sell_price = COALESCE(${body.sell_price ?? null}, sell_price),
+            stock_qty = COALESCE(${body.stock_qty ?? null}, stock_qty), min_stock_qty = COALESCE(${body.min_stock_qty ?? null}, min_stock_qty), is_active = COALESCE(${body.is_active ?? null}, is_active),
+            image_url = COALESCE(${body.image_url ?? null}, image_url), notes = COALESCE(${body.notes ?? null}, notes), updated_at = now()
+          WHERE id = ${id} RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] });
       }
@@ -156,48 +141,38 @@ export default async function handler(req) {
       }
     }
 
-    // === CUSTOMERS ===
+    // ==========================================
+    // === [ CUSTOMERS ] ===
+    // ==========================================
     if (table === 'customers') {
       if (req.method === 'GET') {
         const search = url.searchParams.get('search');
+        let rows = [];
         if (search) {
-          const data = await sql`
-            SELECT * FROM customers
-            WHERE name ILIKE ${'%' + search + '%'}
-               OR phone ILIKE ${'%' + search + '%'}
-            ORDER BY created_at DESC
-          `;
-          return jsonResponse({ success: true, data });
+          const searchParam = `%${search}%`;
+          rows = await sql`SELECT * FROM customers WHERE name ILIKE ${searchParam} OR phone ILIKE ${searchParam} ORDER BY created_at DESC`;
+        } else {
+          rows = await sql`SELECT * FROM customers ORDER BY created_at DESC`;
         }
-        const data = await sql`SELECT * FROM customers ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
+        return jsonResponse({ success: true, data: rows });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
+        const cId = crypto.randomUUID();
         const result = await sql`
-          INSERT INTO customers (name, phone, email, address, tax_id, credit_limit, notes)
-          VALUES (${body.name}, ${body.phone || null}, ${body.email || null}, ${body.address || null},
-                  ${body.tax_id || null}, ${body.credit_limit || 0}, ${body.notes || null})
-          RETURNING *
+          INSERT INTO customers (id, name, phone, email, address, tax_id, credit_limit, notes)
+          VALUES (${cId}, ${body.name}, ${body.phone || null}, ${body.email || null}, ${body.address || null}, ${body.tax_id || null}, ${body.credit_limit || 0}, ${body.notes || null}) RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] }, 201);
       }
 
       if (req.method === 'PUT' && id) {
-        const body = await req.json();
         const result = await sql`
           UPDATE customers SET
-            name = COALESCE(${body.name}, name),
-            phone = COALESCE(${body.phone}, phone),
-            email = COALESCE(${body.email}, email),
-            address = COALESCE(${body.address}, address),
-            tax_id = COALESCE(${body.tax_id}, tax_id),
-            credit_limit = COALESCE(${body.credit_limit}, credit_limit),
-            notes = COALESCE(${body.notes}, notes),
-            is_active = COALESCE(${body.is_active}, is_active)
-          WHERE id = ${id}
-          RETURNING *
+            name = COALESCE(${body.name ?? null}, name), phone = COALESCE(${body.phone ?? null}, phone), email = COALESCE(${body.email ?? null}, email),
+            address = COALESCE(${body.address ?? null}, address), tax_id = COALESCE(${body.tax_id ?? null}, tax_id), credit_limit = COALESCE(${body.credit_limit ?? null}, credit_limit),
+            notes = COALESCE(${body.notes ?? null}, notes), is_active = COALESCE(${body.is_active ?? null}, is_active)
+          WHERE id = ${id} RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] });
       }
@@ -208,48 +183,38 @@ export default async function handler(req) {
       }
     }
 
-    // === SUPPLIERS ===
+    // ==========================================
+    // === [ SUPPLIERS ] ===
+    // ==========================================
     if (table === 'suppliers') {
       if (req.method === 'GET') {
         const search = url.searchParams.get('search');
+        let rows = [];
         if (search) {
-          const data = await sql`
-            SELECT * FROM suppliers
-            WHERE name ILIKE ${'%' + search + '%'}
-               OR phone ILIKE ${'%' + search + '%'}
-            ORDER BY created_at DESC
-          `;
-          return jsonResponse({ success: true, data });
+          const searchParam = `%${search}%`;
+          rows = await sql`SELECT * FROM suppliers WHERE name ILIKE ${searchParam} OR phone ILIKE ${searchParam} ORDER BY created_at DESC`;
+        } else {
+          rows = await sql`SELECT * FROM suppliers ORDER BY created_at DESC`;
         }
-        const data = await sql`SELECT * FROM suppliers ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
+        return jsonResponse({ success: true, data: rows });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
+        const sId = crypto.randomUUID();
         const result = await sql`
-          INSERT INTO suppliers (name, phone, email, address, tax_id, credit_limit, notes)
-          VALUES (${body.name}, ${body.phone || null}, ${body.email || null}, ${body.address || null},
-                  ${body.tax_id || null}, ${body.credit_limit || 0}, ${body.notes || null})
-          RETURNING *
+          INSERT INTO suppliers (id, name, phone, email, address, tax_id, credit_limit, notes)
+          VALUES (${sId}, ${body.name}, ${body.phone || null}, ${body.email || null}, ${body.address || null}, ${body.tax_id || null}, ${body.credit_limit || 0}, ${body.notes || null}) RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] }, 201);
       }
 
       if (req.method === 'PUT' && id) {
-        const body = await req.json();
         const result = await sql`
           UPDATE suppliers SET
-            name = COALESCE(${body.name}, name),
-            phone = COALESCE(${body.phone}, phone),
-            email = COALESCE(${body.email}, email),
-            address = COALESCE(${body.address}, address),
-            tax_id = COALESCE(${body.tax_id}, tax_id),
-            credit_limit = COALESCE(${body.credit_limit}, credit_limit),
-            notes = COALESCE(${body.notes}, notes),
-            is_active = COALESCE(${body.is_active}, is_active)
-          WHERE id = ${id}
-          RETURNING *
+            name = COALESCE(${body.name ?? null}, name), phone = COALESCE(${body.phone ?? null}, phone), email = COALESCE(${body.email ?? null}, email),
+            address = COALESCE(${body.address ?? null}, address), tax_id = COALESCE(${body.tax_id ?? null}, tax_id), credit_limit = COALESCE(${body.credit_limit ?? null}, credit_limit),
+            notes = COALESCE(${body.notes ?? null}, notes), is_active = COALESCE(${body.is_active ?? null}, is_active)
+          WHERE id = ${id} RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] });
       }
@@ -260,56 +225,38 @@ export default async function handler(req) {
       }
     }
 
-    // === INVOICES ===
+    // ==========================================
+    // === [ INVOICES ] ===
+    // ==========================================
     if (table === 'invoices') {
       if (req.method === 'GET') {
         if (id) {
-          const invoices = await sql`
-            SELECT i.*, c.name as customer_name
-            FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.id
-            WHERE i.id = ${id}
-          `;
-          if (invoices.length === 0) {
-            return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
-          }
-          return jsonResponse({ success: true, data: invoices[0] });
+          const result = await sql`SELECT i.*, c.name as customer_name FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id WHERE i.id = ${id}`;
+          if (result.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          return jsonResponse({ success: true, data: result[0] });
         }
-
-        const data = await sql`
-          SELECT i.*, c.name as customer_name
-          FROM invoices i
-          LEFT JOIN customers c ON i.customer_id = c.id
-          ORDER BY i.created_at DESC
-        `;
-        return jsonResponse({ success: true, data });
+        const result = await sql`SELECT i.*, c.name as customer_name FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id ORDER BY i.created_at DESC`;
+        return jsonResponse({ success: true, data: result });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
         const invoice_number = generateInvoiceNumber();
-
-        const result = await sql`
-          INSERT INTO invoices (invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
-          VALUES (${invoice_number}, ${body.customer_id || null}, ${body.status || 'paid'},
-                  ${body.subtotal || 0}, ${body.discount_amt || 0}, ${body.tax_rate || 0}, ${body.tax_amt || 0},
-                  ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null})
-          RETURNING *
+        const invId = crypto.randomUUID();
+        const invoiceResult = await sql`
+          INSERT INTO invoices (id, invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
+          VALUES (${invId}, ${invoice_number}, ${body.customer_id || null}, ${body.status || 'paid'}, ${body.subtotal || 0}, ${body.discount_amt || 0}, ${body.tax_rate || 0}, ${body.tax_amt || 0}, ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null}) RETURNING *
         `;
+        const invoice = invoiceResult[0];
 
-        const invoice = result[0];
-
-        // Insert invoice items
         if (body.items && body.items.length > 0) {
           for (const item of body.items) {
+            const itemId = crypto.randomUUID();
             await sql`
-              INSERT INTO invoice_items (invoice_id, product_id, name, qty, unit_price, discount, total)
-              VALUES (${invoice.id}, ${item.product_id || null}, ${item.name}, ${item.qty},
-                      ${item.unit_price}, ${item.discount || 0}, ${item.total})
+              INSERT INTO invoice_items (id, invoice_id, product_id, name, qty, unit_price, discount, total) 
+              VALUES (${itemId}, ${invoice.id}, ${item.product_id || null}, ${item.name}, ${item.qty}, ${item.unit_price}, ${item.discount || 0}, ${item.total})
             `;
           }
         }
-
         return jsonResponse({ success: true, data: invoice }, 201);
       }
 
@@ -320,78 +267,51 @@ export default async function handler(req) {
     }
 
     // === INVOICE ITEMS ===
-    if (table === 'invoice_items') {
+    if (table === 'invoice-items' || table === 'invoice_items') {
       if (req.method === 'GET') {
         const invoiceId = url.searchParams.get('invoice_id');
-        if (invoiceId) {
-          const data = await sql`
-            SELECT * FROM invoice_items WHERE invoice_id = ${invoiceId} ORDER BY created_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM invoice_items ORDER BY created_at`;
-        return jsonResponse({ success: true, data });
+        const result = invoiceId 
+          ? await sql`SELECT * FROM invoice_items WHERE invoice_id = ${invoiceId} ORDER BY created_at`
+          : await sql`SELECT * FROM invoice_items ORDER BY created_at`;
+        return jsonResponse({ success: true, data: result });
       }
     }
 
-    // === PURCHASES ===
+    // ==========================================
+    // === [ PURCHASES ] ===
+    // ==========================================
     if (table === 'purchases') {
       if (req.method === 'GET') {
         if (id) {
-          const purchases = await sql`
-            SELECT p.*, s.name as supplier_name
-            FROM purchases p
-            LEFT JOIN suppliers s ON p.supplier_id = s.id
-            WHERE p.id = ${id}
-          `;
-          if (purchases.length === 0) {
-            return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
-          }
-          return jsonResponse({ success: true, data: purchases[0] });
+          const result = await sql`SELECT p.*, s.name as supplier_name FROM purchases p LEFT JOIN suppliers s ON p.supplier_id = s.id WHERE p.id = ${id}`;
+          if (result.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          return jsonResponse({ success: true, data: result[0] });
         }
-
-        const data = await sql`
-          SELECT p.*, s.name as supplier_name
-          FROM purchases p
-          LEFT JOIN suppliers s ON p.supplier_id = s.id
-          ORDER BY p.created_at DESC
-        `;
-        return jsonResponse({ success: true, data });
+        const result = await sql`SELECT p.*, s.name as supplier_name FROM purchases p LEFT JOIN suppliers s ON p.supplier_id = s.id ORDER BY p.created_at DESC`;
+        return jsonResponse({ success: true, data: result });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
         const purchase_number = generatePurchaseNumber();
-
-        const result = await sql`
-          INSERT INTO purchases (purchase_number, supplier_id, status, subtotal, discount_amt, tax_amt, total_amount, paid_amount, payment_method, notes)
-          VALUES (${purchase_number}, ${body.supplier_id || null}, ${body.status || 'received'},
-                  ${body.subtotal || 0}, ${body.discount_amt || 0}, ${body.tax_amt || 0},
-                  ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null})
-          RETURNING *
+        const purId = crypto.randomUUID();
+        const purchaseResult = await sql`
+          INSERT INTO purchases (id, purchase_number, supplier_id, status, subtotal, discount_amt, tax_amt, total_amount, paid_amount, payment_method, notes)
+          VALUES (${purId}, ${purchase_number}, ${body.supplier_id || null}, ${body.status || 'received'}, ${body.subtotal || 0}, ${body.discount_amt || 0}, ${body.tax_amt || 0}, ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null}) RETURNING *
         `;
+        const purchase = purchaseResult[0];
 
-        const purchase = result[0];
-
-        // Insert purchase items and update stock
         if (body.items && body.items.length > 0) {
           for (const item of body.items) {
+            const itemId = crypto.randomUUID();
             await sql`
-              INSERT INTO purchase_items (purchase_id, product_id, name, qty, unit_cost, total)
-              VALUES (${purchase.id}, ${item.product_id || null}, ${item.name}, ${item.qty},
-                      ${item.unit_cost}, ${item.total})
+              INSERT INTO purchase_items (id, purchase_id, product_id, name, qty, unit_cost, total) 
+              VALUES (${itemId}, ${purchase.id}, ${item.product_id || null}, ${item.name}, ${item.qty}, ${item.unit_cost}, ${item.total})
             `;
-
-            // Update product stock
             if (item.product_id) {
-              await sql`
-                UPDATE products SET stock_qty = stock_qty + ${item.qty}, updated_at = now()
-                WHERE id = ${item.product_id}
-              `;
+              await sql`UPDATE products SET stock_qty = stock_qty + ${item.qty}, updated_at = now() WHERE id = ${item.product_id}`;
             }
           }
         }
-
         return jsonResponse({ success: true, data: purchase }, 201);
       }
 
@@ -405,65 +325,42 @@ export default async function handler(req) {
     if (table === 'purchase_items') {
       if (req.method === 'GET') {
         const purchaseId = url.searchParams.get('purchase_id');
-        if (purchaseId) {
-          const data = await sql`
-            SELECT * FROM purchase_items WHERE purchase_id = ${purchaseId} ORDER BY created_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM purchase_items ORDER BY created_at`;
-        return jsonResponse({ success: true, data });
+        const result = purchaseId 
+          ? await sql`SELECT * FROM purchase_items WHERE purchase_id = ${purchaseId} ORDER BY created_at`
+          : await sql`SELECT * FROM purchase_items ORDER BY created_at`;
+        return jsonResponse({ success: true, data: result });
       }
     }
 
-    // === EXPENSES ===
+    // ==========================================
+    // === [ EXPENSES ] ===
+    // ==========================================
     if (table === 'expenses') {
       if (req.method === 'GET') {
         if (id) {
-          const expenses = await sql`
-            SELECT e.*, ec.name as category_name
-            FROM expenses e
-            LEFT JOIN expense_categories ec ON e.category_id = ec.id
-            WHERE e.id = ${id}
-          `;
-          if (expenses.length === 0) {
-            return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
-          }
-          return jsonResponse({ success: true, data: expenses[0] });
+          const result = await sql`SELECT e.*, ec.name as category_name FROM expenses e LEFT JOIN expense_categories ec ON e.category_id = ec.id WHERE e.id = ${id}`;
+          if (result.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
+          return jsonResponse({ success: true, data: result[0] });
         }
-
-        const data = await sql`
-          SELECT e.*, ec.name as category_name
-          FROM expenses e
-          LEFT JOIN expense_categories ec ON e.category_id = ec.id
-          ORDER BY e.expense_date DESC
-        `;
-        return jsonResponse({ success: true, data });
+        const result = await sql`SELECT e.*, ec.name as category_name FROM expenses e LEFT JOIN expense_categories ec ON e.category_id = ec.id ORDER BY e.expense_date DESC`;
+        return jsonResponse({ success: true, data: result });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
+        const expId = crypto.randomUUID();
         const result = await sql`
-          INSERT INTO expenses (category_id, description, amount, paid_by, receipt_url, expense_date)
-          VALUES (${body.category_id || null}, ${body.description}, ${body.amount},
-                  ${body.paid_by || null}, ${body.receipt_url || null}, ${body.expense_date || null})
-          RETURNING *
+          INSERT INTO expenses (id, category_id, description, amount, paid_by, receipt_url, expense_date)
+          VALUES (${expId}, ${body.category_id || null}, ${body.description}, ${body.amount}, ${body.paid_by || null}, ${body.receipt_url || null}, ${body.expense_date || null}) RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] }, 201);
       }
 
       if (req.method === 'PUT' && id) {
-        const body = await req.json();
         const result = await sql`
           UPDATE expenses SET
-            category_id = COALESCE(${body.category_id}, category_id),
-            description = COALESCE(${body.description}, description),
-            amount = COALESCE(${body.amount}, amount),
-            paid_by = COALESCE(${body.paid_by}, paid_by),
-            receipt_url = COALESCE(${body.receipt_url}, receipt_url),
-            expense_date = COALESCE(${body.expense_date}, expense_date)
-          WHERE id = ${id}
-          RETURNING *
+            category_id = COALESCE(${body.category_id ?? null}, category_id), description = COALESCE(${body.description ?? null}, description), amount = COALESCE(${body.amount ?? null}, amount),
+            paid_by = COALESCE(${body.paid_by ?? null}, paid_by), receipt_url = COALESCE(${body.receipt_url ?? null}, receipt_url), expense_date = COALESCE(${body.expense_date ?? null}, expense_date)
+          WHERE id = ${id} RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] });
       }
@@ -475,84 +372,57 @@ export default async function handler(req) {
     }
 
     // === EXPENSE CATEGORIES ===
-    if (table === 'expense_categories') {
+    if (table === 'expense-categories' || table === 'expense_categories') {
       if (req.method === 'GET') {
-        const data = await sql`SELECT * FROM expense_categories ORDER BY name`;
-        return jsonResponse({ success: true, data });
+        const result = await sql`SELECT * FROM expense_categories ORDER BY name`;
+        return jsonResponse({ success: true, data: result });
       }
     }
 
-    // === WHATSAPP QUEUE ===
-    if (table === 'whatsapp_queue') {
+    // ==========================================
+    // === [ WHATSAPP QUEUE ] ===
+    // ==========================================
+    if (table === 'whatsapp' || table === 'whatsapp_queue') {
       if (req.method === 'GET') {
         const status = url.searchParams.get('status');
-        if (status === 'pending') {
-          const data = await sql`
-            SELECT * FROM whatsapp_queue WHERE status = 'pending' ORDER BY created_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM whatsapp_queue ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
+        const result = status === 'pending'
+          ? await sql`SELECT * FROM whatsapp_queue WHERE status = 'pending' ORDER BY created_at`
+          : await sql`SELECT * FROM whatsapp_queue ORDER BY created_at DESC`;
+        return jsonResponse({ success: true, data: result });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
+        const wId = crypto.randomUUID();
         const result = await sql`
-          INSERT INTO whatsapp_queue (recipient, message, template_name, template_params, created_by)
-          VALUES (${body.recipient}, ${body.message}, ${body.template_name || null},
-                  ${body.template_params || null}, ${user?.userId || null})
-          RETURNING *
+          INSERT INTO whatsapp_queue (id, recipient, message, template_name, template_params, created_by)
+          VALUES (${wId}, ${body.recipient}, ${body.message}, ${body.template_name || null}, ${body.template_params || null}, ${user?.userId || null}) RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] }, 201);
       }
 
       if (req.method === 'PUT' && id) {
-        const body = await req.json();
         const result = await sql`
           UPDATE whatsapp_queue SET
-            status = COALESCE(${body.status}, status),
-            error_message = COALESCE(${body.error_message}, error_message),
-            sent_at = CASE WHEN ${body.status} = 'sent' THEN now() ELSE sent_at END
-          WHERE id = ${id}
-          RETURNING *
+            status = COALESCE(${body.status ?? null}, status), error_message = COALESCE(${body.error_message ?? null}, error_message),
+            sent_at = CASE WHEN ${body.status ?? null} = 'sent' THEN now() ELSE sent_at END
+          WHERE id = ${id} RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] });
       }
     }
 
-    // === DASHBOARD STATS ===
-    if (action === 'dashboard') {
-      const today = new Date().toISOString().slice(0, 10);
+    // ==========================================
+    // === [ DASHBOARD STATS ] ===
+    // ==========================================
+    if (action === 'dashboard' || table === 'dashboard') {
+      const today = new Date().toISOString().slice(0, 10) + 'T00:00:00';
 
-      const todayStats = await sql`
-        SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count
-        FROM invoices WHERE created_at >= ${today + 'T00:00:00'} AND status != 'cancelled'
-      `;
-
-      const totalStats = await sql`
-        SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count
-        FROM invoices WHERE status != 'cancelled'
-      `;
-
-      const purchaseTotal = await sql`
-        SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'
-      `;
-
-      const expenseTotal = await sql`
-        SELECT COALESCE(SUM(amount), 0) as total FROM expenses
-      `;
-
-      const productCount = await sql`
-        SELECT COUNT(*) as count FROM products WHERE is_active = true
-      `;
-
-      const recentInvoices = await sql`
-        SELECT i.*, c.name as customer_name
-        FROM invoices i
-        LEFT JOIN customers c ON i.customer_id = c.id
-        ORDER BY i.created_at DESC LIMIT 5
-      `;
+      const todayStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as today_sales, COUNT(*) as today_count FROM invoices WHERE created_at >= ${today} AND status != 'cancelled'`;
+      const totalStats = await sql`SELECT COALESCE(SUM(total_amount), 0) as total_revenue, COUNT(*) as total_count FROM invoices WHERE status != 'cancelled'`;
+      const purchaseTotal = await sql`SELECT COALESCE(SUM(total_amount), 0) as total FROM purchases WHERE status != 'cancelled'`;
+      const expenseTotal = await sql`SELECT COALESCE(SUM(amount), 0) as total FROM expenses`;
+      const productCount = await sql`SELECT COUNT(*) as count FROM products WHERE is_active = true`;
+      const recentInvoices = await sql`SELECT i.*, c.name as customer_name FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id ORDER BY i.created_at DESC LIMIT 5`;
 
       const stats = {
         todaySales: Number(todayStats[0]?.today_sales || 0),
@@ -563,75 +433,69 @@ export default async function handler(req) {
         totalExpenses: Number(expenseTotal[0]?.total || 0)
       };
 
-      return jsonResponse({
-        success: true,
-        data: { stats, recentInvoices: recentInvoices }
-      });
+      return jsonResponse({ success: true, data: { stats, recentInvoices } });
     }
 
-    // === AUDIT LOG ===
+    // ==========================================
+    // === [ AUDIT LOG ] ===
+    // ==========================================
     if (table === 'audit_log') {
       if (req.method === 'GET') {
-        const limit = url.searchParams.get('limit') || 100;
-        const data = await sql`
-          SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ${parseInt(limit)}
-        `;
-        return jsonResponse({ success: true, data });
+        const limit = parseInt(url.searchParams.get('limit') || '100');
+        const result = await sql`SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ${limit}`;
+        return jsonResponse({ success: true, data: result });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
+        const alId = crypto.randomUUID();
         await sql`
-          INSERT INTO audit_log (user_id, table_name, record_id, action, old_values, new_values, ip_address)
-          VALUES (${user?.userId || null}, ${body.table_name}, ${body.record_id || null},
-                  ${body.action}, ${body.old_values || null}, ${body.new_values || null},
-                  ${body.ip_address || null})
+          INSERT INTO audit_log (id, user_id, table_name, record_id, action, old_values, new_values, ip_address) 
+          VALUES (${alId}, ${user?.userId || null}, ${body.table_name}, ${body.record_id || null}, ${body.action}, ${body.old_values || null}, ${body.new_values || null}, ${body.ip_address || null})
         `;
         return jsonResponse({ success: true });
       }
     }
 
-    // === SYNC QUEUE (for offline support) ===
+    // ==========================================
+    // === [ SYNC QUEUE ] ===
+    // ==========================================
     if (table === 'sync_queue') {
       if (req.method === 'GET') {
         const pendingOnly = url.searchParams.get('pending') === 'true';
-        if (pendingOnly) {
-          const data = await sql`
-            SELECT * FROM sync_queue WHERE synced = false ORDER BY created_at
-          `;
-          return jsonResponse({ success: true, data });
-        }
-        const data = await sql`SELECT * FROM sync_queue ORDER BY created_at DESC`;
-        return jsonResponse({ success: true, data });
+        const result = pendingOnly 
+          ? await sql`SELECT * FROM sync_queue WHERE synced = false ORDER BY created_at`
+          : await sql`SELECT * FROM sync_queue ORDER BY created_at DESC`;
+        return jsonResponse({ success: true, data: result });
       }
 
       if (req.method === 'POST') {
-        const body = await req.json();
+        const sqId = crypto.randomUUID();
         const result = await sql`
-          INSERT INTO sync_queue (user_id, table_name, record_id, operation, data)
-          VALUES (${user?.userId || null}, ${body.table_name}, ${body.record_id},
-                  ${body.operation}, ${body.data || null})
-          RETURNING *
+          INSERT INTO sync_queue (id, user_id, table_name, record_id, operation, data)
+          VALUES (${sqId}, ${user?.userId || null}, ${body.table_name}, ${body.record_id}, ${body.operation}, ${body.data || null}) RETURNING *
         `;
         return jsonResponse({ success: true, data: result[0] }, 201);
       }
 
       if (req.method === 'PUT' && id) {
-        await sql`
-          UPDATE sync_queue SET synced = true, synced_at = now() WHERE id = ${id}
-        `;
+        await sql`UPDATE sync_queue SET synced = true, synced_at = now() WHERE id = ${id}`;
         return jsonResponse({ success: true });
       }
     }
 
-    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE', message: 'الجدول غير معروف' }, 400);
+    return jsonResponse({ success: false, error: 'UNKNOWN_TABLE', message: 'الجدول المطلوب غير معروف' }, 400);
 
   } catch (error) {
     console.error('Data API Error:', error);
-    return jsonResponse({
-      success: false,
-      error: 'SERVER_ERROR',
-      message: error.message
-    }, 500);
+    return jsonResponse({ success: false, error: 'SERVER_ERROR', message: error.message }, 500);
   }
+}
+
+// === [ التصدير المتوافق مع معايير Vercel لأسلوب Web Fetch API Modern ] ===
+export async function GET(request) { return await handleRequest(request); }
+export async function POST(request) { return await handleRequest(request); }
+export async function PUT(request) { return await handleRequest(request); }
+export async function DELETE(request) { return await handleRequest(request); }
+export async function OPTIONS() { 
+  return new Response(null, { status: 200, headers: corsHeaders }); 
 }
