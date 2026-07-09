@@ -1,126 +1,184 @@
 /**
- * Shift Context
- * =-=-=-=-=-=-=-=
- * سياق إدارة الورديات
- * يحفظ بيانات الوردية الحالية في Preferences
+ * Shift Context - Safe Version
+ * =-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+ * سياق إدارة الورديات مع حماية كاملة
  */
 
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { Preferences } from '@capacitor/preferences';
-import { useDatabase } from './DatabaseContext.jsx';
-import { useAuth } from './AuthContext.jsx';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { useDatabase } from './DatabaseContext.jsx'
+import { useAuth } from './AuthContext.jsx'
 
 // Storage key
-const SHIFT_KEY = 'nawh_current_shift';
+const SHIFT_KEY = 'nawh_current_shift'
 
 // Context
-const ShiftContext = createContext(null);
+const ShiftContext = createContext(null)
+
+// Safe storage helper (same as DatabaseContext)
+const safeStorage = {
+  async get(key) {
+    try {
+      if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.Preferences) {
+        const { Preferences } = await import('@capacitor/preferences')
+        const { value } = await Preferences.get({ key })
+        return value ? JSON.parse(value) : null
+      }
+    } catch {}
+    try {
+      const local = localStorage.getItem(key)
+      return local ? JSON.parse(local) : null
+    } catch {
+      return null
+    }
+  },
+
+  async set(key, value) {
+    try {
+      if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.Preferences) {
+        const { Preferences } = await import('@capacitor/preferences')
+        await Preferences.set({ key, value: JSON.stringify(value) })
+        return true
+      }
+    } catch {}
+    try {
+      localStorage.setItem(key, JSON.stringify(value))
+      return true
+    } catch {
+      return false
+    }
+  },
+
+  async remove(key) {
+    try {
+      if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.Preferences) {
+        const { Preferences } = await import('@capacitor/preferences')
+        await Preferences.remove({ key })
+        return true
+      }
+    } catch {}
+    try {
+      localStorage.removeItem(key)
+      return true
+    } catch {
+      return false
+    }
+  }
+}
 
 /**
  * Shift Provider Component
  */
 export function ShiftProvider({ children }) {
-  const [currentShift, setCurrentShift] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [isShiftOpen, setIsShiftOpen] = useState(false);
+  const [currentShift, setCurrentShift] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [isShiftOpen, setIsShiftOpen] = useState(false)
 
-  const { db } = useDatabase();
-  const { user } = useAuth();
+  const { shifts } = useDatabase()
+  const { user } = useAuth()
 
   // Load shift from storage on mount
   useEffect(() => {
-    loadShift();
-  }, []);
+    loadShift()
+  }, [])
 
   /**
-   * Load shift from Preferences
+   * Load shift from storage safely
    */
   const loadShift = async () => {
     try {
-      const stored = await getFromStorage(SHIFT_KEY);
-      if (stored) {
-        setCurrentShift(stored);
-        setIsShiftOpen(true);
+      const stored = await safeStorage.get(SHIFT_KEY)
+      if (stored && stored.id) {
+        setCurrentShift(stored)
+        setIsShiftOpen(true)
       }
     } catch (err) {
-      console.error('Error loading shift:', err);
+      console.warn('Error loading shift:', err)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   /**
    * Open new shift
-   * @param {number} startingCash - المبلغ الافتتاحي للوردية
+   * @param {number} startingCash - المبلغ الافتتاحي
    */
   const openShift = useCallback(async (startingCash = 0) => {
-    if (!user) {
-      throw new Error('يجب تسجيل الدخول أولاً');
+    if (!user || !user.id) {
+      throw new Error('يجب تسجيل الدخول أولاً')
     }
 
     if (isShiftOpen) {
-      throw new Error('الوردية الحالية مفتوحة بالفعل');
+      throw new Error('الوردية الحالية مفتوحة بالفعل')
     }
 
     try {
-      // Create shift record in database
-      const shiftData = await db.shifts.open(user.id, user.full_name || user.email, startingCash);
+      const shiftData = await shifts.open(
+        user.id,
+        user.full_name || user.email || 'مستخدم',
+        startingCash
+      )
 
-      setCurrentShift(shiftData);
-      setIsShiftOpen(true);
+      if (shiftData) {
+        setCurrentShift(shiftData)
+        setIsShiftOpen(true)
+      }
 
-      return shiftData;
+      return shiftData
     } catch (err) {
-      console.error('Error opening shift:', err);
-      throw err;
+      console.error('Error opening shift:', err)
+      throw err
     }
-  }, [user, isShiftOpen, db]);
+  }, [user, isShiftOpen, shifts])
 
   /**
    * Close current shift
-   * @param {number} endingCash - المبلغ النهائي الفعلي
+   * @param {number} endingCash - المبلغ النهائي
    * @param {string} notes - ملاحظات
    */
   const closeShift = useCallback(async (endingCash, notes = '') => {
-    if (!currentShift) {
-      throw new Error('لا توجد وردية مفتوحة');
+    if (!currentShift || !currentShift.id) {
+      throw new Error('لا توجد وردية مفتوحة')
     }
 
     try {
       // Calculate shift stats
-      const stats = await calculateShiftStats();
+      const stats = await calculateShiftStats()
 
       // Close shift in database
-      const closedShift = await db.shifts.close(currentShift.id, {
-        endingCash,
-        totalSales: stats.totalSales,
-        totalRefunds: stats.totalRefunds,
-        totalExpenses: stats.totalExpenses,
-        cashSales: stats.cashSales,
-        cardSales: stats.cardSales,
-        creditSales: stats.creditSales,
-        invoiceCount: stats.invoiceCount,
-        notes
-      });
+      const closedShift = await shifts.close(currentShift.id, {
+        endingCash: endingCash || 0,
+        totalSales: stats?.totalSales || 0,
+        totalRefunds: stats?.totalRefunds || 0,
+        totalExpenses: stats?.totalExpenses || 0,
+        cashSales: stats?.cashSales || 0,
+        cardSales: stats?.cardSales || 0,
+        creditSales: stats?.creditSales || 0,
+        invoiceCount: stats?.invoiceCount || 0,
+        notes: notes || ''
+      })
 
       // Clear from storage
-      await removeFromStorage(SHIFT_KEY);
+      await safeStorage.remove(SHIFT_KEY)
 
-      setCurrentShift(null);
-      setIsShiftOpen(false);
+      setCurrentShift(null)
+      setIsShiftOpen(false)
 
-      return closedShift;
+      return closedShift
     } catch (err) {
-      console.error('Error closing shift:', err);
-      throw err;
+      console.error('Error closing shift:', err)
+      // Still clear locally even if sync fails
+      await safeStorage.remove(SHIFT_KEY)
+      setCurrentShift(null)
+      setIsShiftOpen(false)
+      throw err
     }
-  }, [currentShift, db]);
+  }, [currentShift, shifts])
 
   /**
-   * Calculate current shift stats
+   * Calculate current shift stats safely
    */
   const calculateShiftStats = useCallback(async () => {
-    if (!currentShift) {
+    if (!currentShift || !currentShift.id) {
       return {
         totalSales: 0,
         totalRefunds: 0,
@@ -129,43 +187,43 @@ export function ShiftProvider({ children }) {
         cardSales: 0,
         creditSales: 0,
         invoiceCount: 0
-      };
+      }
     }
 
     try {
-      // Get invoices for this shift
-      const invoices = await db.invoices.getAll({ shift_id: currentShift.id });
+      const db = useDatabase()
+      const invoices = await db.invoices.getAll({ shift_id: currentShift.id })
 
-      let totalSales = 0;
-      let totalRefunds = 0;
-      let cashSales = 0;
-      let cardSales = 0;
-      let creditSales = 0;
-      let invoiceCount = 0;
+      let totalSales = 0
+      let totalRefunds = 0
+      let cashSales = 0
+      let cardSales = 0
+      let creditSales = 0
+      let invoiceCount = 0
 
-      for (const inv of invoices) {
+      for (const inv of invoices || []) {
         if (inv.status === 'cancelled') {
-          totalRefunds += inv.total_amount;
+          totalRefunds += inv.total_amount || 0
         } else {
-          totalSales += inv.total_amount;
-          invoiceCount++;
+          totalSales += inv.total_amount || 0
+          invoiceCount++
 
           if (inv.payment_method === 'cash') {
-            cashSales += inv.total_amount;
+            cashSales += inv.total_amount || 0
           } else if (inv.payment_method === 'card') {
-            cardSales += inv.total_amount;
+            cardSales += inv.total_amount || 0
           } else if (inv.payment_method === 'credit') {
-            creditSales += inv.total_amount;
+            creditSales += inv.total_amount || 0
           }
         }
       }
 
       // Get expenses for this shift
-      const expensesResult = await db.query(
+      const expResult = await db.query(
         "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE shift_id = ?",
         [currentShift.id]
-      );
-      const totalExpenses = expensesResult[0]?.total || 0;
+      )
+      const totalExpenses = expResult?.[0]?.total || 0
 
       return {
         totalSales,
@@ -175,46 +233,50 @@ export function ShiftProvider({ children }) {
         cardSales,
         creditSales,
         invoiceCount
-      };
+      }
     } catch (err) {
-      console.error('Error calculating stats:', err);
+      console.error('Error calculating stats:', err)
       return {
-        totalSales: 0,
+        totalSales: currentShift?.total_sales || 0,
         totalRefunds: 0,
         totalExpenses: 0,
-        cashSales: 0,
-        cardSales: 0,
-        creditSales: 0,
-        invoiceCount: 0
-      };
+        cashSales: currentShift?.cash_sales || 0,
+        cardSales: currentShift?.card_sales || 0,
+        creditSales: currentShift?.credit_sales || 0,
+        invoiceCount: currentShift?.invoice_count || 0
+      }
     }
-  }, [currentShift, db]);
+  }, [currentShift])
 
   /**
    * Get shift summary for display
    */
   const getShiftSummary = useCallback(async () => {
     if (!currentShift) {
-      return null;
+      return null
     }
 
-    const stats = await calculateShiftStats();
+    try {
+      const stats = await calculateShiftStats()
 
-    return {
-      ...currentShift,
-      ...stats,
-      expectedCash: (currentShift.starting_cash || 0) + stats.cashSales - stats.totalExpenses,
-      variance: endingCash => endingCash - ((currentShift.starting_cash || 0) + stats.cashSales - stats.totalExpenses)
-    };
-  }, [currentShift, calculateShiftStats]);
+      return {
+        ...currentShift,
+        ...stats,
+        expectedCash: (currentShift.starting_cash || 0) + (stats?.cashSales || 0) - (stats?.totalExpenses || 0),
+        variance: (endingCash) => endingCash - ((currentShift.starting_cash || 0) + (stats?.cashSales || 0) - (stats?.totalExpenses || 0))
+      }
+    } catch {
+      return currentShift
+    }
+  }, [currentShift, calculateShiftStats])
 
   /**
-   * Check if shift is active for current user
+   * Check if shift belongs to current user
    */
   const isUserShift = useCallback(() => {
-    if (!currentShift || !user) return false;
-    return currentShift.user_id === user.id;
-  }, [currentShift, user]);
+    if (!currentShift || !user) return false
+    return currentShift.user_id === user.id
+  }, [currentShift, user])
 
   // Context value
   const value = {
@@ -226,43 +288,24 @@ export function ShiftProvider({ children }) {
     calculateShiftStats,
     getShiftSummary,
     isUserShift
-  };
+  }
 
   return (
     <ShiftContext.Provider value={value}>
       {children}
     </ShiftContext.Provider>
-  );
+  )
 }
 
 /**
  * Hook to use shift context
  */
 export function useShift() {
-  const context = useContext(ShiftContext);
+  const context = useContext(ShiftContext)
   if (!context) {
-    throw new Error('useShift must be used within ShiftProvider');
+    throw new Error('useShift must be used within ShiftProvider')
   }
-  return context;
+  return context
 }
 
-// Helper functions
-async function getFromStorage(key) {
-  try {
-    const { value } = await Preferences.get({ key });
-    return value ? JSON.parse(value) : null;
-  } catch (err) {
-    const local = localStorage.getItem(key);
-    return local ? JSON.parse(local) : null;
-  }
-}
-
-async function removeFromStorage(key) {
-  try {
-    await Preferences.remove({ key });
-  } catch (err) {
-    localStorage.removeItem(key);
-  }
-}
-
-export default ShiftContext;
+export default ShiftContext
