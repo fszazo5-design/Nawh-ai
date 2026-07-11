@@ -1,4 +1,4 @@
-import { getDb } from './_db.js';
+import { getDb, initializeDatabase } from './_db.js';
 
 /**
  * Auth API Endpoint (Vercel Web Fetch API Style)
@@ -105,7 +105,7 @@ async function handleRequest(req) {
         // 1. تجهيز اسم السكيما المستقل بناءً على اسم الشركة بشكل آمن
         const schemaName = sanitizeSchemaName(company_name);
 
-        // 2. إنشاء حساب المستخدم في الجدول الرئيسي أولاً
+        // 2. إنشاء حساب المستخدم في الجدول الرئيسي (المخطط العام) أولاً لإدارة تسجيل الدخول العام
         const result = await sql`
           INSERT INTO users (id, email, password_hash, full_name, company_name, role, is_active)
           VALUES (${userId}, ${email}, ${passwordHash}, ${full_name || ''}, ${company_name || ''}, 'user', true)
@@ -114,8 +114,8 @@ async function handleRequest(req) {
         
         const user = result[0];
 
-        // 3. إنشاء السكيما الخاصة بالشركة فوراً بالاعتماد على الطريقة المباشرة والمتوافقة مع دالة الـ neon() الصافية
-        await sql(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+        // 3. الحل: استدعاء دالة التهيئة المحدثة لتقوم بإنشاء السكيما وبناء كافة الجداول والفهارس بداخلها فوراً
+        await initializeDatabase(schemaName);
 
         const token = generateToken(user.id, user.email, user.role);
         
@@ -125,7 +125,7 @@ async function handleRequest(req) {
             user: { ...user, schema_name: schemaName }, 
             token 
           }, 
-          message: 'تم إنشاء الحساب وإنشاء السكيما الخاصة بالشركة بنجاح' 
+          message: 'تم إنشاء الحساب، السكيما الخاصة بالشركة، وكافة جداول البيانات بنجاح' 
         }, 201);
       }
 
