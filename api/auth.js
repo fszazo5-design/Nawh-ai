@@ -12,7 +12,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// دالة لتنظيف اسم الشركة وتحويله لاسم سكيما صالح لـ Postgres (حروف صغيرة، وبدون مسافات أو رموز خاصة)
+// دالة لتنظيف اسم الشركة وتحويله لاسم سكيما صالح وآمن لـ Postgres بدون أي رموز أو مسافات
 function sanitizeSchemaName(companyName) {
   if (!companyName) return 'tenant_' + crypto.randomUUID().split('-')[0];
   
@@ -20,7 +20,7 @@ function sanitizeSchemaName(companyName) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_\u0600-\u06FF]/g, '_') // يدعم الحروف العربية والإنجليزية والأرقام
-    .replace(/^[^a-z_\u0600-\u06FF]/, '_');    // يجب أن تبدأ السكيما بحرف أو شرطة سفلية وليس رقم
+    .replace(/^[^a-z_\u0600-\u06FF]/, '_');    // يجب أن تبدأ السكيما بحرف وليس رقم
     
   return safeName || 'tenant_' + crypto.randomUUID().split('-')[0];
 }
@@ -102,10 +102,10 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // تجهيز اسم السكيما المستقل بناءً على اسم الشركة
+        // 1. تجهيز اسم السكيما المستقل بناءً على اسم الشركة بشكل آمن
         const schemaName = sanitizeSchemaName(company_name);
 
-        // 1. أولاً: نقوم بإنشاء حساب المستخدم في جدول المستخدمين الرئيسي
+        // 2. إنشاء حساب المستخدم في الجدول الرئيسي أولاً
         const result = await sql`
           INSERT INTO users (id, email, password_hash, full_name, company_name, role, is_active)
           VALUES (${userId}, ${email}, ${passwordHash}, ${full_name || ''}, ${company_name || ''}, 'user', true)
@@ -114,11 +114,8 @@ async function handleRequest(req) {
         
         const user = result[0];
 
-        // 2. ثانياً: نقوم بإنشاء السكيما الخاصة بالشركة مباشرة باستخدام كائن الـ sql المتوفر
-        await sql.unsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
-        
-        // ملاحظة: إذا رغبت مستقبلاً بإنشاء جداول افتراضية للعميل داخل السكيما الخاصة به، قم بوضعها هنا:
-        // await sql.unsafe(`CREATE TABLE IF NOT EXISTS "${schemaName}".settings (...)`);
+        // 3. إنشاء السكيما الخاصة بالشركة فوراً بالاعتماد على الطريقة المباشرة والمتوافقة مع دالة الـ neon() الصافية
+        await sql(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
 
         const token = generateToken(user.id, user.email, user.role);
         
