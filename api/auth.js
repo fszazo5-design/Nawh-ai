@@ -16,7 +16,6 @@ const corsHeaders = {
 function sanitizeSchemaName(companyName) {
   if (!companyName) return 'tenant_' + crypto.randomUUID().split('-')[0];
   
-  // تحويل الحروف الإنجليزية إلى صغيرة، واستبدال المسافات والرموز بشرطة سفلية
   let safeName = companyName
     .trim()
     .toLowerCase()
@@ -106,28 +105,31 @@ async function handleRequest(req) {
         // تجهيز اسم السكيما المستقل بناءً على اسم الشركة
         const schemaName = sanitizeSchemaName(company_name);
 
-        // استخدام الـ Transaction للتأكد من نجاح العملية بالكامل (إنشاء الحساب + إنشاء السكيما)
-        const user = await sql.begin(async (sqlTrans) => {
-          
-          // 1. إنشاء السكيما المستقلة للشركة الجديدة
-          await sqlTrans.unsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
-          
-          // ملحوظة: إذا كنت تريد إنشاء جداول افتراضية داخل السكيما فور إنشائها، يمكنك كتابتها هنا، مثل:
-          // await sqlTrans.unsafe(`CREATE TABLE IF NOT EXISTS "${schemaName}".settings (...)`);
+        // 1. أولاً: نقوم بإنشاء حساب المستخدم في جدول المستخدمين الرئيسي
+        const result = await sql`
+          INSERT INTO users (id, email, password_hash, full_name, company_name, role, is_active)
+          VALUES (${userId}, ${email}, ${passwordHash}, ${full_name || ''}, ${company_name || ''}, 'user', true)
+          RETURNING id, email, full_name, company_name, role, is_active, created_at
+        `;
+        
+        const user = result[0];
 
-          // 2. إدخال بيانات المستخدم وتخزين اسم السكيما المخصصة له
-          const result = await sqlTrans`
-            INSERT INTO users (id, email, password_hash, full_name, company_name, role, is_active)
-            VALUES (${userId}, ${email}, ${passwordHash}, ${full_name || ''}, ${company_name || ''}, 'user', true)
-            RETURNING id, email, full_name, company_name, role, is_active, created_at
-          `;
-          
-          return result[0];
-        });
+        // 2. ثانياً: نقوم بإنشاء السكيما الخاصة بالشركة مباشرة باستخدام كائن الـ sql المتوفر
+        await sql.unsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+        
+        // ملاحظة: إذا رغبت مستقبلاً بإنشاء جداول افتراضية للعميل داخل السكيما الخاصة به، قم بوضعها هنا:
+        // await sql.unsafe(`CREATE TABLE IF NOT EXISTS "${schemaName}".settings (...)`);
 
         const token = generateToken(user.id, user.email, user.role);
-        // نُعيد اسم السكيما التي تم إنشاؤها ضمن البيانات لتأكيد العملية بنجاح
-        return jsonResponse({ success: true, data: { user: { ...user, schema_name: schemaName }, token }, message: 'تم إنشاء الحساب وإنشاء السكيما الخاصة بالشركة بنجاح' }, 201);
+        
+        return jsonResponse({ 
+          success: true, 
+          data: { 
+            user: { ...user, schema_name: schemaName }, 
+            token 
+          }, 
+          message: 'تم إنشاء الحساب وإنشاء السكيما الخاصة بالشركة بنجاح' 
+        }, 201);
       }
 
       // تسجيل الدخول
