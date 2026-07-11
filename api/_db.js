@@ -19,14 +19,18 @@ export function getDb() {
 }
 
 /**
- * Initialize database tables if they don't exist
+ * Initialize database tables if they don't exist inside a specific schema
  */
-export async function initializeDatabase() {
+export async function initializeDatabase(schemaName = 'public') {
   const sql = getDb();
 
-  await sql`
+  // 1. إنشاء السكيما أولاً إذا لم تكن موجودة
+  await sql(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+
+  // 2. بناء الجداول داخل السكيما المحددة
+  await sql(`
     -- Users table
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       email TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
@@ -37,11 +41,11 @@ export async function initializeDatabase() {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Products table
-    CREATE TABLE IF NOT EXISTS products (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".products (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
       barcode TEXT UNIQUE,
@@ -57,11 +61,11 @@ export async function initializeDatabase() {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Customers table
-    CREATE TABLE IF NOT EXISTS customers (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".customers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
       phone TEXT,
@@ -73,11 +77,11 @@ export async function initializeDatabase() {
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Suppliers table
-    CREATE TABLE IF NOT EXISTS suppliers (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".suppliers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
       phone TEXT,
@@ -89,23 +93,23 @@ export async function initializeDatabase() {
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Expense categories table
-    CREATE TABLE IF NOT EXISTS expense_categories (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".expense_categories (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL UNIQUE,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Invoices table
-    CREATE TABLE IF NOT EXISTS invoices (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".invoices (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       invoice_number TEXT NOT NULL UNIQUE,
-      customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+      customer_id UUID REFERENCES "${schemaName}".customers(id) ON DELETE SET NULL,
       status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'pending', 'cancelled')),
       subtotal NUMERIC(12,2) DEFAULT 0,
       discount_amt NUMERIC(12,2) DEFAULT 0,
@@ -117,14 +121,14 @@ export async function initializeDatabase() {
       notes TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Invoice items table
-    CREATE TABLE IF NOT EXISTS invoice_items (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".invoice_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-      product_id UUID REFERENCES products(id) ON DELETE SET NULL,
+      invoice_id UUID NOT NULL REFERENCES "${schemaName}".invoices(id) ON DELETE CASCADE,
+      product_id UUID REFERENCES "${schemaName}".products(id) ON DELETE SET NULL,
       name TEXT NOT NULL,
       qty NUMERIC(12,3) NOT NULL,
       unit_price NUMERIC(12,2) NOT NULL,
@@ -132,14 +136,14 @@ export async function initializeDatabase() {
       total NUMERIC(12,2) NOT NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Purchases table
-    CREATE TABLE IF NOT EXISTS purchases (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".purchases (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       purchase_number TEXT NOT NULL UNIQUE,
-      supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+      supplier_id UUID REFERENCES "${schemaName}".suppliers(id) ON DELETE SET NULL,
       status TEXT DEFAULT 'received' CHECK (status IN ('received', 'pending', 'cancelled')),
       subtotal NUMERIC(12,2) DEFAULT 0,
       discount_amt NUMERIC(12,2) DEFAULT 0,
@@ -150,27 +154,27 @@ export async function initializeDatabase() {
       notes TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Purchase items table
-    CREATE TABLE IF NOT EXISTS purchase_items (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".purchase_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      purchase_id UUID NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
-      product_id UUID REFERENCES products(id) ON DELETE SET NULL,
+      purchase_id UUID NOT NULL REFERENCES "${schemaName}".purchases(id) ON DELETE CASCADE,
+      product_id UUID REFERENCES "${schemaName}".products(id) ON DELETE SET NULL,
       name TEXT NOT NULL,
       qty NUMERIC(12,3) NOT NULL,
       unit_cost NUMERIC(12,2) NOT NULL,
       total NUMERIC(12,2) NOT NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Expenses table
-    CREATE TABLE IF NOT EXISTS expenses (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".expenses (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      category_id UUID REFERENCES expense_categories(id) ON DELETE SET NULL,
+      category_id UUID REFERENCES "${schemaName}".expense_categories(id) ON DELETE SET NULL,
       description TEXT NOT NULL,
       amount NUMERIC(12,2) NOT NULL,
       paid_by TEXT,
@@ -178,11 +182,11 @@ export async function initializeDatabase() {
       expense_date DATE,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- WhatsApp queue table
-    CREATE TABLE IF NOT EXISTS whatsapp_queue (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".whatsapp_queue (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       recipient TEXT NOT NULL,
       message TEXT NOT NULL,
@@ -191,16 +195,16 @@ export async function initializeDatabase() {
       status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
       error_message TEXT,
       sent_at TIMESTAMPTZ,
-      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_by UUID REFERENCES "${schemaName}".users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Audit log table
-    CREATE TABLE IF NOT EXISTS audit_log (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".audit_log (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      user_id UUID REFERENCES "${schemaName}".users(id) ON DELETE SET NULL,
       table_name TEXT NOT NULL,
       record_id UUID,
       action TEXT NOT NULL,
@@ -210,13 +214,13 @@ export async function initializeDatabase() {
       user_agent TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  await sql`
+  await sql(`
     -- Sync queue table for offline mobile sync
-    CREATE TABLE IF NOT EXISTS sync_queue (
+    CREATE TABLE IF NOT EXISTS "${schemaName}".sync_queue (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+      user_id UUID REFERENCES "${schemaName}".users(id) ON DELETE CASCADE,
       table_name TEXT NOT NULL,
       record_id UUID NOT NULL,
       operation TEXT NOT NULL CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE')),
@@ -225,20 +229,20 @@ export async function initializeDatabase() {
       synced_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT now()
     )
-  `;
+  `);
 
-  // Create indexes
-  await sql`CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_invoices_created ON invoices(created_at DESC)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_whatsapp_status ON whatsapp_queue(status)`;
+  // 3. إنشاء الفهارس (Indexes) الفريدة لكل سكيما لتفادي تعارض الأسماء في قاعدة البيانات
+  await sql(`CREATE INDEX IF NOT EXISTS "idx_prod_bar_${schemaName}" ON "${schemaName}".products(barcode)`);
+  await sql(`CREATE INDEX IF NOT EXISTS "idx_prod_cat_${schemaName}" ON "${schemaName}".products(category)`);
+  await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_cust_${schemaName}" ON "${schemaName}".invoices(customer_id)`);
+  await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_stat_${schemaName}" ON "${schemaName}".invoices(status)`);
+  await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_created_${schemaName}" ON "${schemaName}".invoices(created_at DESC)`);
+  await sql(`CREATE INDEX IF NOT EXISTS "idx_users_email_${schemaName}" ON "${schemaName}".users(email)`);
+  await sql(`CREATE INDEX IF NOT EXISTS "idx_wa_status_${schemaName}" ON "${schemaName}".whatsapp_queue(status)`);
 
-  // Insert default expense categories if not exist
-  await sql`
-    INSERT INTO expense_categories (name)
+  // 4. إدخال التصنيفات الافتراضية للمصاريف الخاصة بهذه السكيما
+  await sql(`
+    INSERT INTO "${schemaName}".expense_categories (name)
     VALUES
       ('رواتب'),
       ('إيجار'),
@@ -249,9 +253,9 @@ export async function initializeDatabase() {
       ('تسويق'),
       ('أخرى')
     ON CONFLICT (name) DO NOTHING
-  `;
+  `);
 
-  return { success: true, message: 'Database initialized successfully' };
+  return { success: true, message: `Database schema '${schemaName}' initialized successfully` };
 }
 
 export default { getDb, initializeDatabase };
