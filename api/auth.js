@@ -12,11 +12,11 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// دالة لتنظيف اسم الشركة وتحويله لاسم سكيما صالح وآمن لـ Postgres بدون أي رموز أو مسافات
-function sanitizeSchemaName(companyName) {
-  if (!companyName) return 'tenant_' + crypto.randomUUID().split('-')[0];
+// دالة لتنظيف الاسم وتحويله لاسم سكيما صالح وآمن لـ Postgres بدون أي رموز أو مسافات
+function sanitizeSchemaName(name) {
+  if (!name) return 'tenant_' + crypto.randomUUID().split('-')[0];
   
-  let safeName = companyName
+  let safeName = name
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_\u0600-\u06FF]/g, '_') // يدعم الحروف العربية والإنجليزية والأرقام
@@ -102,10 +102,10 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // 1. تجهيز اسم السكيما المستقل بناءً على اسم الشركة بشكل آمن
-        const schemaName = sanitizeSchemaName(company_name);
+        // التعديل هنا: تجهيز اسم السكيما المستقل بناءً على (حقل الاسم الكامل full_name)
+        const schemaName = sanitizeSchemaName(full_name);
 
-        // 2. إنشاء حساب المستخدم في الجدول الرئيسي (المخطط العام) أولاً لإدارة تسجيل الدخول العام
+        // 2. إنشاء حساب المستخدم في الجدول الرئيسي
         const result = await sql`
           INSERT INTO users (id, email, password_hash, full_name, company_name, role, is_active)
           VALUES (${userId}, ${email}, ${passwordHash}, ${full_name || ''}, ${company_name || ''}, 'user', true)
@@ -114,7 +114,7 @@ async function handleRequest(req) {
         
         const user = result[0];
 
-        // 3. الحل: استدعاء دالة التهيئة المحدثة لتقوم بإنشاء السكيما وبناء كافة الجداول والفهارس بداخلها فوراً
+        // 3. استدعاء دالة التهيئة لإنشاء السكيما والجداول باسم المستخدم الجديد
         await initializeDatabase(schemaName);
 
         const token = generateToken(user.id, user.email, user.role);
@@ -125,7 +125,7 @@ async function handleRequest(req) {
             user: { ...user, schema_name: schemaName }, 
             token 
           }, 
-          message: 'تم إنشاء الحساب، السكيما الخاصة بالشركة، وكافة جداول البيانات بنجاح' 
+          message: 'تم إنشاء الحساب، السكيما الخاصة بالمستخدم، وكافة جداول البيانات بنجاح' 
         }, 201);
       }
 
