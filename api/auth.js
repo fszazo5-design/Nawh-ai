@@ -3,7 +3,7 @@ import { getDb, initializeDatabase } from './_db.js';
 /**
  * Auth API Endpoint
  * يعتمد على جدول مركزي وحيد في السكيما العامة باسم app_users
- * ويقوم بإنشاء سكيمات ديناميكية مستقلة لكل عميل بناءً على الـ full_name
+ * ويقوم بإنشاء سكيمات ديناميكية مستقلة لكل عميل بناءً على الاسم القادم من التطبيق مرن للغاية
  */
 
 const corsHeaders = {
@@ -12,7 +12,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// دالة لتنظيف وتحويل full_name لاسم سكيما متوافق مع Postgres
+// دالة لتنظيف وتحويل الاسم لاسم سكيما متوافق مع Postgres
 function generateSchemaName(fullName) {
   if (!fullName) return 'tenant_' + crypto.randomUUID().split('-')[0];
   
@@ -75,9 +75,18 @@ async function handleRequest(req) {
 
       // --- التسجيل (Register) ---
       if (action === 'register') {
-        const { email, password, full_name, company_name } = body;
+        const { email, password } = body;
+        
+        // 🔄 مرونة المدخلات: استخراج الاسم بأي صيغة يرسلها كود التطبيق
+        const full_name = body.full_name || body.fullName || body.name;
+        const company_name = body.company_name || body.companyName || body.company;
+
         if (!email || !password || !full_name) {
-          return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني، كلمة المرور والاسم الكامل مطلوبين' }, 400);
+          return jsonResponse({ 
+            success: false, 
+            error: 'VALIDATION_ERROR', 
+            message: 'البريد الإلكتروني، كلمة المرور والاسم الكامل مطلوبين' 
+          }, 400);
         }
 
         // 1. الفحص المركزي في جدول public.app_users
@@ -89,7 +98,7 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // توليد اسم السكيما من الـ full_name القادم من الواجهة
+        // توليد اسم السكيما من الـ full_name المرن المستخرج
         const schemaName = generateSchemaName(full_name);
 
         // 2. حفظ السجل المركزي الأساسي
@@ -102,7 +111,6 @@ async function handleRequest(req) {
         await initializeDatabase(schemaName);
 
         // 4. إدراج كافة البيانات التفصيلية داخل جدول الـ users التابع للسكيما الجديدة
-        // تم استخدام المصفوفة [schemaName, 'users'] الآمنة لـ Neon لمنع أخطاء الـ Syntax
         const result = await sql`
           INSERT INTO ${sql([schemaName, 'users'])} (id, email, password_hash, full_name, company_name, role, is_active)
           VALUES (${userId}, ${email}, ${passwordHash}, ${full_name}, ${company_name || ''}, 'user', true)
@@ -201,7 +209,9 @@ async function handleRequest(req) {
       const targetUserId = id || payload.userId;
 
       if (action === 'profile') {
-        const { full_name, company_name } = body;
+        const full_name = body.full_name || body.fullName || body.name;
+        const company_name = body.company_name || body.companyName || body.company;
+
         await sql`
           UPDATE ${sql([userSchema, 'users'])} SET full_name = ${full_name}, company_name = ${company_name}, updated_at = now()
           WHERE id = ${targetUserId}
