@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext.jsx'
 import { Zap, Mail, Lock, User, Eye, EyeOff, AlertCircle, Loader2, CheckCircle } from 'lucide-react'
 
+// استيراد مكتبة كابتشور (Preferences) لحفظ البيانات على أندرويد
+import { Preferences } from '@capacitor/preferences'
+
 export default function RegisterPage() {
   const navigate = useNavigate()
   const { register } = useAuth()
@@ -52,6 +55,18 @@ export default function RegisterPage() {
       })
 
       if (result.success) {
+        // === التعديل المخصص لـ أندرويد (كابتشور) ===
+        // حفظ التوكن، اسم السكيما، وبيانات المستخدم الجديد في مساحة تخزين الأندرويد
+        if (result.token) {
+          await Preferences.set({ key: 'token', value: result.token });
+        }
+        if (result.schemaName) {
+          await Preferences.set({ key: 'schemaName', value: result.schemaName });
+        }
+        if (result.user) {
+          await Preferences.set({ key: 'userData', value: JSON.stringify(result.user) });
+        }
+
         setSuccess(true)
         setTimeout(() => {
           navigate('/')
@@ -60,6 +75,7 @@ export default function RegisterPage() {
         setError(result.message || 'حدث خطأ في إنشاء الحساب')
       }
     } catch (err) {
+      console.error('Register Android Preferences Error:', err)
       setError('حدث خطأ في النظام')
     } finally {
       setLoading(false)
