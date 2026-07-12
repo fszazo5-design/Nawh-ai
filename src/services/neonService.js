@@ -294,11 +294,11 @@ export const auth = {
   /**
    * إنشاء حساب جديد
    */
-  async register({ email, password, full_name }) {
+  async register({ email, password, name }) {
     const result = await httpRequest({
       url: AUTH_ENDPOINTS.REGISTER,
       method: 'POST',
-      data: { email, password, full_name }
+      data: { email, password, name }
     });
 
     if (result.success && result.data?.token) {
