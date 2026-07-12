@@ -12,11 +12,11 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// دالة لتنظيف اسم الشركة وتحويله لاسم سكيما صالح وآمن لـ Postgres بدون أي رموز أو مسافات
-function sanitizeSchemaName(companyName) {
-  if (!companyName) return 'tenant_' + crypto.randomUUID().split('-')[0];
+// دالة لتنظيف وتحويل full_name لاسم سكيما مستقل وصالح وآمن لـ Postgres
+function generateSchemaName(fullName) {
+  if (!fullName) return 'tenant_' + crypto.randomUUID().split('-')[0];
   
-  let safeName = companyName
+  let safeName = fullName
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_\u0600-\u06FF]/g, '_') // يدعم الحروف العربية والإنجليزية والأرقام
@@ -39,9 +39,9 @@ async function verifyPassword(password, hash) {
   return passwordHash === hash;
 }
 
-// Generate JWT-like token (simple version)
-function generateToken(userId, email, role) {
-  const payload = { userId, email, role, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 };
+// توليد التوكن مع تضمين اسم السكيما للتوجيه اللاحق
+function generateToken(userId, email, role, schemaName) {
+  const payload = { userId, email, role, schemaName, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 };
   return btoa(JSON.stringify(payload));
 }
 
@@ -87,37 +87,43 @@ async function handleRequest(req) {
       // إرسال بيانات التسجيل
       if (action === 'register') {
         const { email, password, full_name, company_name } = body;
-        if (!email || !password) {
-          return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
+        if (!email || !password || !full_name) {
+          return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني، كلمة المرور والاسم الكامل مطلوبان' }, 400);
         }
         if (password.length < 6) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
         }
 
-        const existingUsers = await sql`SELECT id FROM users WHERE email = ${email}`;
+        // 1. الفحص المركزي في جدول الحسابات الموحد لضمان عدم تكرار البريد الإلكتروني
+        const existingUsers = await sql`SELECT id FROM public.app_users WHERE email = ${email}`;
         if (existingUsers.length > 0) {
-          return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل' }, 400);
+          return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل على المنصة' }, 400);
         }
 
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // 1. تجهيز اسم السكيما المستقل بناءً على اسم الشركة بشكل آمن
-        const schemaName = sanitizeSchemaName(company_name);
+        // 2. تجهيز اسم السكيما المستقل بناءً على الاسم الكامل (full_name) القادم من الواجهة
+        const schemaName = generateSchemaName(full_name);
 
-        // 2. إنشاء حساب المستخدم في الجدول الرئيسي (المخطط العام) أولاً لإدارة تسجيل الدخول العام
+        // 3. إنشاء السجل الأساسي في الجدول المركزي (app_users) لتوجيه تسجيل الدخول لاحقاً
+        await sql`
+          INSERT INTO public.app_users (id, email, password_hash, schema_name)
+          VALUES (${userId}, ${email}, ${passwordHash}, ${schemaName})
+        `;
+
+        // 4. استدعاء دالة التهيئة لإنشاء السكيما الجديدة وبناء كافة الجداول بداخلها تلقائياً
+        await initializeDatabase(schemaName);
+
+        // 5. كتابة البيانات التفصيلية داخل جدول الـ users التابع للسكيما المنشأة حديثاً
         const result = await sql`
-          INSERT INTO users (id, email, password_hash, full_name, company_name, role, is_active)
-          VALUES (${userId}, ${email}, ${passwordHash}, ${full_name || ''}, ${company_name || ''}, 'user', true)
+          INSERT INTO ${sql([schemaName, 'users'])} (id, email, password_hash, full_name, company_name, role, is_active)
+          VALUES (${userId}, ${email}, ${passwordHash}, ${full_name}, ${company_name || ''}, 'user', true)
           RETURNING id, email, full_name, company_name, role, is_active, created_at
         `;
         
         const user = result[0];
-
-        // 3. الحل: استدعاء دالة التهيئة المحدثة لتقوم بإنشاء السكيما وبناء كافة الجداول والفهارس بداخلها فوراً
-        await initializeDatabase(schemaName);
-
-        const token = generateToken(user.id, user.email, user.role);
+        const token = generateToken(user.id, user.email, user.role, schemaName);
         
         return jsonResponse({ 
           success: true, 
@@ -125,7 +131,7 @@ async function handleRequest(req) {
             user: { ...user, schema_name: schemaName }, 
             token 
           }, 
-          message: 'تم إنشاء الحساب، السكيما الخاصة بالشركة، وكافة جداول البيانات بنجاح' 
+          message: 'تم إنشاء الحساب وتخصيص السكيما بنجاح بناءً على اسم المستخدم' 
         }, 201);
       }
 
@@ -136,24 +142,36 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
         }
 
-        const users = await sql`SELECT * FROM users WHERE email = ${email}`;
-        const user = users[0];
+        // 1. البحث المركزي لمعرفة اسم السكيما الخاصة بالمستخدم من إيميله
+        const centralUsers = await sql`SELECT * FROM public.app_users WHERE email = ${email}`;
+        const centralUser = centralUsers[0];
 
-        if (!user || !await verifyPassword(password, user.password_hash)) {
+        if (!centralUser || !await verifyPassword(password, centralUser.password_hash)) {
           return jsonResponse({ success: false, error: 'INVALID_CREDENTIALS', message: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' }, 401);
+        }
+
+        const activeSchema = centralUser.schema_name;
+
+        // 2. جلب البيانات الكاملة من السكيما المستقلة والخاصة به
+        const tenantUsers = await sql`SELECT * FROM ${sql([activeSchema, 'users'])} WHERE id = ${centralUser.id}`;
+        const user = tenantUsers[0];
+
+        if (!user) {
+          return jsonResponse({ success: false, error: 'TENANT_NOT_FOUND', message: 'فشل الوصول إلى بيانات السكيما الخاصة بك' }, 404);
         }
 
         if (!user.is_active) {
           return jsonResponse({ success: false, error: 'ACCOUNT_DISABLED', message: 'الحساب معطل' }, 403);
         }
 
-        await sql`UPDATE users SET last_login = now() WHERE id = ${user.id}`;
-        const token = generateToken(user.id, user.email, user.role);
+        // تحديث سجل الدخول الأخير في السكيما المخصصة له
+        await sql`UPDATE ${sql([activeSchema, 'users'])} SET last_login = now() WHERE id = ${user.id}`;
+        const token = generateToken(user.id, user.email, user.role, activeSchema);
 
         return jsonResponse({
           success: true,
           data: {
-            user: { id: user.id, email: user.email, full_name: user.full_name, company_name: user.company_name, role: user.role },
+            user: { id: user.id, email: user.email, full_name: user.full_name, company_name: user.company_name, role: user.role, schema_name: activeSchema },
             token
           },
           message: 'تم تسجيل الدخول بنجاح'
@@ -173,15 +191,17 @@ async function handleRequest(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح أو منتهي الصلاحية' }, 401);
       }
 
+      const userSchema = payload.schemaName;
+
       if (action === 'me') {
         const users = await sql`
           SELECT id, email, full_name, company_name, role, is_active, last_login, created_at
-          FROM users WHERE id = ${payload.userId}
+          FROM ${sql([userSchema, 'users'])} WHERE id = ${payload.userId}
         `;
         if (users.length === 0) {
           return jsonResponse({ success: false, error: 'USER_NOT_FOUND', message: 'المستخدم غير موجود' }, 404);
         }
-        return jsonResponse({ success: true, data: users[0] });
+        return jsonResponse({ success: true, data: { ...users[0], schema_name: userSchema } });
       }
 
       if (action === 'users') {
@@ -190,7 +210,7 @@ async function handleRequest(req) {
         }
         const users = await sql`
           SELECT id, email, full_name, company_name, role, is_active, last_login, created_at
-          FROM users ORDER BY created_at DESC
+          FROM ${sql([userSchema, 'users'])} ORDER BY created_at DESC
         `;
         return jsonResponse({ success: true, data: users });
       }
@@ -204,13 +224,14 @@ async function handleRequest(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح' }, 401);
       }
 
+      const userSchema = payload.schemaName;
       const body = await req.json();
       const targetUserId = id || payload.userId;
 
       if (action === 'profile') {
         const { full_name, company_name } = body;
         await sql`
-          UPDATE users SET full_name = ${full_name}, company_name = ${company_name}, updated_at = now()
+          UPDATE ${sql([userSchema, 'users'])} SET full_name = ${full_name}, company_name = ${company_name}, updated_at = now()
           WHERE id = ${targetUserId}
         `;
         return jsonResponse({ success: true, message: 'تم تحديث الملف الشخصي' });
@@ -222,7 +243,7 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور الحالية والجديدة مطلوبتان' }, 400);
         }
 
-        const users = await sql`SELECT password_hash FROM users WHERE id = ${targetUserId}`;
+        const users = await sql`SELECT password_hash FROM ${sql([userSchema, 'users'])} WHERE id = ${targetUserId}`;
         const user = users[0];
 
         if (!await verifyPassword(current_password, user.password_hash)) {
@@ -230,10 +251,11 @@ async function handleRequest(req) {
         }
 
         const newPasswordHash = await hashPassword(new_password);
-        await sql`
-          UPDATE users SET password_hash = ${newPasswordHash}, updated_at = now()
-          WHERE id = ${targetUserId}
-        `;
+        
+        // المزامنة التامة والتحديث في كل من الجدول المركزي وجدول السكيما
+        await sql`UPDATE public.app_users SET password_hash = ${newPasswordHash} WHERE id = ${targetUserId}`;
+        await sql`UPDATE ${sql([userSchema, 'users'])} SET password_hash = ${newPasswordHash}, updated_at = now() WHERE id = ${targetUserId}`;
+        
         return jsonResponse({ success: true, message: 'تم تحديث كلمة المرور بنجاح' });
       }
     }
