@@ -3,7 +3,7 @@ import { getDb, initializeDatabase } from './_db.js';
 /**
  * Data API Endpoint (Vercel Web Fetch API Style)
  * Unified API for all database operations: products, customers, suppliers, invoices, etc.
- * متوافق تماماً مع معايير الويب ومعالج الـ Fetch في Vercel
+ * متوافق تماماً مع معايير الويب ومعالج الـ Fetch في Vercel وجلب البيانات من الـ Schema الخاصة بها.
  */
 
 // CORS headers
@@ -50,6 +50,7 @@ function generatePurchaseNumber() {
 
 // الدالة الرئيسية الموحدة لمعالجة كافة الطلبات والمداول للـ ERP
 async function handleRequest(req) {
+  // 1. جلب كائن الاتصال المخصص الجاهز بالـ Schema المرتبطة به
   const sql = getDb();
 
   const host = typeof req.headers.get === 'function' ? req.headers.get('host') : (req.headers?.host || 'localhost');
@@ -61,7 +62,7 @@ async function handleRequest(req) {
   const action = url.searchParams.get('action');
 
   try {
-    // 1. تهيئة قاعدة البيانات عند استدعاء الـ init-db
+    // 2. تهيئة قاعدة البيانات عند استدعاء الـ init-db
     if (action === 'init-db' || table === 'init-db') {
       try {
         const result = await initializeDatabase();
