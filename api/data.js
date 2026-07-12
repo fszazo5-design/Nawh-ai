@@ -21,14 +21,14 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// Verify auth token
+// دالة فحص التوكن المحدثة (تتحقق وتستخرج اسم السكيما بشكل آمن للجميع)
 function verifyToken(authHeader) {
   const token = authHeader?.replace('Bearer ', '');
   if (!token) return null;
   try {
     const payload = JSON.parse(atob(token));
     if (payload.exp < Date.now()) return null;
-    return payload;
+    return payload; // يحتوي على userId و email و schemaName
   } catch {
     return null;
   }
@@ -50,9 +50,6 @@ function generatePurchaseNumber() {
 
 // الدالة الرئيسية الموحدة لمعالجة كافة الطلبات والمداول للـ ERP
 async function handleRequest(req) {
-  // 1. جلب كائن الاتصال المخصص الجاهز بالـ Schema المرتبطة به
-  const sql = getDb();
-
   const host = typeof req.headers.get === 'function' ? req.headers.get('host') : (req.headers?.host || 'localhost');
   const authHeader = typeof req.headers.get === 'function' ? req.headers.get('authorization') : (req.headers?.authorization);
 
@@ -61,22 +58,31 @@ async function handleRequest(req) {
   const id = url.searchParams.get('id');
   const action = url.searchParams.get('action');
 
+  // 1. فحص وفك التوكن لاستخراج اسم السكيما (مطلوب لجميع العمليات لمعرفة جدول من سنقرأ)
+  const user = verifyToken(authHeader);
+
   try {
-    // 2. تهيئة قاعدة البيانات عند استدعاء الـ init-db
+    // 2. معالجة تهيئة السكيما (إن وجدت)
     if (action === 'init-db' || table === 'init-db') {
+      const schemaToInit = user?.schemaName || url.searchParams.get('schema');
+      if (!schemaToInit) {
+        return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'اسم السكيما مطلوب للتهيئة' }, 400);
+      }
       try {
-        const result = await initializeDatabase();
+        const result = await initializeDatabase(schemaToInit);
         return jsonResponse(result);
       } catch (error) {
         return jsonResponse({ success: false, error: error.message }, 500);
       }
     }
 
-    // التحقق من صلاحية التوكن للعمليات الحساسة (عدا الـ GET)
-    const user = verifyToken(authHeader);
-    if (!user && req.method !== 'GET') {
-      return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'غير مصرح للقيام بهذه العملية' }, 401);
+    // 3. منع الدخول في حال غياب التوكن أو عدم صلاحيته (لأن كل العمليات أصبحت مخصصة لسكيما معينة)
+    if (!user || !user.schemaName) {
+      return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'جلسة العمل منتهية أو غير صالحة، يرجى إعادة تسجيل الدخول' }, 401);
     }
+
+    // 4. استدعاء قاعدة البيانات مع تمرير اسم السكيما المستخرجة من التوكن تلقائياً لتوجه الاستعلامات للمكان الصحيح
+    const sql = getDb(user.schemaName);
 
     // قراءة الـ body تلقائياً من الـ Web Request
     let body = {};
@@ -492,7 +498,7 @@ async function handleRequest(req) {
   }
 }
 
-// === [ التصدير المتوافق مع معايير Vercel لأسلوب Web Fetch API Modern ] ===
+// === [ التصدير المتوافق مع معايير Vercel ] ===
 export async function GET(request) { return await handleRequest(request); }
 export async function POST(request) { return await handleRequest(request); }
 export async function PUT(request) { return await handleRequest(request); }
