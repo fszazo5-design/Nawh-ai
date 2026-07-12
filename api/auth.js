@@ -9,7 +9,7 @@ import { getDb, initializeDatabase } from './_db.js';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, X-Tenant-Schema',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
 // دالة لتنظيف الاسم وتحويله لاسم سكيما متوافق وآمن لـ Postgres (أحرف إنجليزية صغيرة وأرقام فقط)
@@ -75,11 +75,6 @@ async function handleRequest(req) {
     ? req.headers.get('authorization') 
     : (req.headers?.authorization || req.headers?.['authorization']);
 
-  // استقبال اسم السكيما من الـ Headers
-  const clientSchemaHeader = typeof req.headers.get === 'function'
-    ? req.headers.get('x-tenant-schema')
-    : (req.headers?.['x-tenant-schema']);
-
   const url = new URL(req.url, `https://${host}`);
   const action = url.searchParams.get('action') || 'me';
   const id = url.searchParams.get('id'); 
@@ -99,22 +94,28 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
         }
 
+        // 1. [الفحص الصحيح]: التحقق من عدم تكرار البريد الإلكتروني في الجدول المركزي العام (public)
+        const existingUsers = await sql`
+          SELECT id FROM public.users WHERE email = ${email}
+        `;
+        if (existingUsers.length > 0) {
+          return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل على المنصة' }, 400);
+        }
+
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         const schemaName = sanitizeSchemaName(full_name);
 
-        // 1. إنشاء السكيما وجداولها أولاً
+        // 2. حفظ سجل المستخدم المركزي في الجدول العام ليعرف النظام مستقبلاً إلى أي سكيما ينتمي هذا الإيميل
+        await sql`
+          INSERT INTO public.users (id, email, password_hash, schema_name, role, is_active)
+          VALUES (${userId}, ${email}, ${passwordHash}, ${schemaName}, 'user', true)
+        `;
+
+        // 3. إنشاء السكيما المستقلة للمستخدم وبناء الجداول الخاصة به داخلياً
         await initializeDatabase(schemaName);
 
-        // 2. التحقق من عدم تكرار البريد (باستخدام الصياغة المصفوفية المدعومة رسمياً لربط السكيما بالجدول بأمان)
-        const existingUsers = await sql`
-          SELECT id FROM ${sql([schemaName, 'users'])} WHERE email = ${email}
-        `;
-        if (existingUsers.length > 0) {
-          return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل في هذه السكيما' }, 400);
-        }
-
-        // 3. إدراج الحساب الجديد بالصيغة الصحيحة المعزولة
+        // 4. إدراج بيانات الحساب التفصيلية داخل جدول الـ users المخصص لهذه السكيما الجديدة التي تم تهيئتها للتو
         const result = await sql`
           INSERT INTO ${sql([schemaName, 'users'])} (id, email, password_hash, full_name, company_name, role, is_active)
           VALUES (${userId}, ${email}, ${passwordHash}, ${full_name || ''}, ${company_name || ''}, 'user', true)
@@ -130,7 +131,7 @@ async function handleRequest(req) {
             user: { ...user, schema_name: schemaName }, 
             token 
           }, 
-          message: 'تم إنشاء الحساب وحفظ كافة البيانات داخل السكيما المخصصة بنجاح' 
+          message: 'تم إنشاء الحساب وتخصيص السكيما بنجاح' 
         }, 201);
       }
 
@@ -141,34 +142,37 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
         }
 
-        const activeSchema = clientSchemaHeader || 'public';
+        // 1. البحث عن الحساب أولاً في الجدول المركزي العام لمعرفة اسم السكيما المرتبطة به
+        const centralUsers = await sql`SELECT * FROM public.users WHERE email = ${email}`;
+        const centralUser = centralUsers[0];
 
-        if (activeSchema === 'public') {
-          return jsonResponse({ success: false, error: 'MISSING_SCHEMA_HEADER', message: 'يجب تحديد اسم السكيما في الـ Headers لإجراء تسجيل الدخول' }, 400);
-        }
-
-        // جلب بيانات تسجيل الدخول بالصيغة الآمنة
-        const users = await sql`SELECT * FROM ${sql([activeSchema, 'users'])} WHERE email = ${email}`;
-        const user = users[0];
-
-        if (!user || !await verifyPassword(password, user.password_hash)) {
+        if (!centralUser || !await verifyPassword(password, centralUser.password_hash)) {
           return jsonResponse({ success: false, error: 'INVALID_CREDENTIALS', message: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' }, 401);
         }
 
-        if (!user.is_active) {
+        if (!centralUser.is_active) {
           return jsonResponse({ success: false, error: 'ACCOUNT_DISABLED', message: 'الحساب معطل' }, 403);
         }
 
+        const activeSchema = centralUser.schema_name;
+
+        // 2. جلب البيانات الكاملة والتفصيلية للمستخدم من السكيما المخصصة له مباشرة
+        const tenantUsers = await sql`SELECT * FROM ${sql([activeSchema, 'users'])} WHERE id = ${centralUser.id}`;
+        const user = tenantUsers[0] || centralUser; // الاحتياط في حال عدم اكتمال البيانات داخل السكيما
+
+        // تحديث وقت تسجيل الدخول في السكيما المخصصة والجدول العام
+        await sql`UPDATE public.users SET last_login = now() WHERE id = ${user.id}`;
         await sql`UPDATE ${sql([activeSchema, 'users'])} SET last_login = now() WHERE id = ${user.id}`;
+        
         const token = generateToken(user.id, user.email, user.role, activeSchema);
 
         return jsonResponse({
           success: true,
           data: {
-            user: { id: user.id, email: user.email, full_name: user.full_name, company_name: user.company_name, role: user.role, schema_name: activeSchema },
+            user: { id: user.id, email: user.email, full_name: user.full_name || '', company_name: user.company_name || '', role: user.role, schema_name: activeSchema },
             token
           },
-          message: 'تم تسجيل الدخول بنجاح من السكيما المخصصة'
+          message: 'تم تسجيل الدخول بنجاح وتوجيهك للسكيما الخاصة بك'
         });
       }
     }
@@ -185,7 +189,7 @@ async function handleRequest(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح أو منتهي الصلاحية' }, 401);
       }
 
-      const userSchema = payload.schemaName || clientSchemaHeader || 'public';
+      const userSchema = payload.schemaName || 'public';
 
       if (action === 'me') {
         const users = await sql`
@@ -218,7 +222,7 @@ async function handleRequest(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح' }, 401);
       }
 
-      const userSchema = payload.schemaName || clientSchemaHeader || 'public';
+      const userSchema = payload.schemaName || 'public';
       const body = await req.json();
       const targetUserId = id || payload.userId;
 
@@ -245,10 +249,11 @@ async function handleRequest(req) {
         }
 
         const newPasswordHash = await hashPassword(new_password);
-        await sql`
-          UPDATE ${sql([userSchema, 'users'])} SET password_hash = ${newPasswordHash}, updated_at = now()
-          WHERE id = ${targetUserId}
-        `;
+        
+        // تحديث كلمة المرور في كلا الجدولين (العام والخاص بالمستأجر لضمان المزامنة)
+        await sql`UPDATE public.users SET password_hash = ${newPasswordHash} WHERE id = ${targetUserId}`;
+        await sql`UPDATE ${sql([userSchema, 'users'])} SET password_hash = ${newPasswordHash}, updated_at = now() WHERE id = ${targetUserId}`;
+        
         return jsonResponse({ success: true, message: 'تم تحديث كلمة المرور بنجاح' });
       }
     }
