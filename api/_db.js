@@ -2,37 +2,48 @@ import { neon } from '@neondatabase/serverless';
 
 /**
  * Database connection helper for Vercel Serverless Functions
- * Uses Neon serverless PostgreSQL
+ * Uses Neon serverless PostgreSQL with dynamic schema routing
  */
 
-let sql = null;
+// لتخزين الاتصالات المختلفة بناءً على اسم السكيما لمنع تكرار الاتصال
+const dbConnections = {};
 
-export function getDb() {
-  if (!sql) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error('DATABASE_URL environment variable is not set');
-    }
-    sql = neon(connectionString);
+export function getDb(schemaName = 'public') {
+  // إذا كان هناك اتصال نشط مسبقاً لهذه السكيما، قم بإعادته مباشرة
+  if (dbConnections[schemaName]) {
+    return dbConnections[schemaName];
   }
-  return sql;
+
+  let connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('DATABASE_URL environment variable is not set');
+  }
+
+  // تنظيف الرابط وإزالة أي خيارات search_path قديمة إن وجدت
+  const url = new URL(connectionString);
+  url.searchParams.set('options', `-c search_path=${schemaName}`);
+
+  // إنشاء اتصال مخصص وموجه بالكامل لهذه السكيما
+  dbConnections[schemaName] = neon(url.toString());
+  
+  return dbConnections[schemaName];
 }
 
 /**
- * Initialize database tables if they don't exist inside a specific schema
+ * Initialize database tables inside a specific schema
  */
 export async function initializeDatabase(schemaName = 'public') {
-  const sql = getDb();
+  // جلب كائن الاتصال الموجه للسكيما المستهدفة
+  const sql = getDb(schemaName);
 
   // 1. إنشاء السكيما أولاً إذا لم تكن موجودة
   await sql(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
 
   // 2. بناء الجداول داخل السكيما المحددة
   await sql(`
-    -- Users table
     CREATE TABLE IF NOT EXISTS "${schemaName}".users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      email TEXT NOT NULL UNIQUE,
+      email TEXT NOT NULL,
       password_hash TEXT NOT NULL,
       full_name TEXT,
       role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'manager', 'user')),
@@ -43,12 +54,15 @@ export async function initializeDatabase(schemaName = 'public') {
     )
   `);
 
+  // نقوم بإضافة قيد فريد (Unique constraint) مجمع للإيميل داخل السكيما لمنع التعارض مع السكيمات الأخرى
+  await sql(`ALTER TABLE "${schemaName}".users DROP CONSTRAINT IF EXISTS users_email_key`);
+  await sql(`ALTER TABLE "${schemaName}".users ADD CONSTRAINT users_email_key UNIQUE (email)`);
+
   await sql(`
-    -- Products table
     CREATE TABLE IF NOT EXISTS "${schemaName}".products (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
-      barcode TEXT UNIQUE,
+      barcode TEXT,
       category TEXT,
       unit TEXT DEFAULT 'قطعة',
       cost_price NUMERIC(12,2) DEFAULT 0,
@@ -62,9 +76,11 @@ export async function initializeDatabase(schemaName = 'public') {
       updated_at TIMESTAMPTZ DEFAULT now()
     )
   `);
+  
+  await sql(`ALTER TABLE "${schemaName}".products DROP CONSTRAINT IF EXISTS products_barcode_key`);
+  await sql(`ALTER TABLE "${schemaName}".products ADD CONSTRAINT products_barcode_key UNIQUE (barcode)`);
 
   await sql(`
-    -- Customers table
     CREATE TABLE IF NOT EXISTS "${schemaName}".customers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
@@ -80,7 +96,6 @@ export async function initializeDatabase(schemaName = 'public') {
   `);
 
   await sql(`
-    -- Suppliers table
     CREATE TABLE IF NOT EXISTS "${schemaName}".suppliers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
@@ -96,19 +111,20 @@ export async function initializeDatabase(schemaName = 'public') {
   `);
 
   await sql(`
-    -- Expense categories table
     CREATE TABLE IF NOT EXISTS "${schemaName}".expense_categories (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     )
   `);
+  
+  await sql(`ALTER TABLE "${schemaName}".expense_categories DROP CONSTRAINT IF EXISTS expense_categories_name_key`);
+  await sql(`ALTER TABLE "${schemaName}".expense_categories ADD CONSTRAINT expense_categories_name_key UNIQUE (name)`);
 
   await sql(`
-    -- Invoices table
     CREATE TABLE IF NOT EXISTS "${schemaName}".invoices (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      invoice_number TEXT NOT NULL UNIQUE,
+      invoice_number TEXT NOT NULL,
       customer_id UUID REFERENCES "${schemaName}".customers(id) ON DELETE SET NULL,
       status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'pending', 'cancelled')),
       subtotal NUMERIC(12,2) DEFAULT 0,
@@ -122,9 +138,11 @@ export async function initializeDatabase(schemaName = 'public') {
       created_at TIMESTAMPTZ DEFAULT now()
     )
   `);
+  
+  await sql(`ALTER TABLE "${schemaName}".invoices DROP CONSTRAINT IF EXISTS invoices_invoice_number_key`);
+  await sql(`ALTER TABLE "${schemaName}".invoices ADD CONSTRAINT invoices_invoice_number_key UNIQUE (invoice_number)`);
 
   await sql(`
-    -- Invoice items table
     CREATE TABLE IF NOT EXISTS "${schemaName}".invoice_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       invoice_id UUID NOT NULL REFERENCES "${schemaName}".invoices(id) ON DELETE CASCADE,
@@ -139,10 +157,9 @@ export async function initializeDatabase(schemaName = 'public') {
   `);
 
   await sql(`
-    -- Purchases table
     CREATE TABLE IF NOT EXISTS "${schemaName}".purchases (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      purchase_number TEXT NOT NULL UNIQUE,
+      purchase_number TEXT NOT NULL,
       supplier_id UUID REFERENCES "${schemaName}".suppliers(id) ON DELETE SET NULL,
       status TEXT DEFAULT 'received' CHECK (status IN ('received', 'pending', 'cancelled')),
       subtotal NUMERIC(12,2) DEFAULT 0,
@@ -155,9 +172,11 @@ export async function initializeDatabase(schemaName = 'public') {
       created_at TIMESTAMPTZ DEFAULT now()
     )
   `);
+  
+  await sql(`ALTER TABLE "${schemaName}".purchases DROP CONSTRAINT IF EXISTS purchases_purchase_number_key`);
+  await sql(`ALTER TABLE "${schemaName}".purchases ADD CONSTRAINT purchases_purchase_number_key UNIQUE (purchase_number)`);
 
   await sql(`
-    -- Purchase items table
     CREATE TABLE IF NOT EXISTS "${schemaName}".purchase_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       purchase_id UUID NOT NULL REFERENCES "${schemaName}".purchases(id) ON DELETE CASCADE,
@@ -171,7 +190,6 @@ export async function initializeDatabase(schemaName = 'public') {
   `);
 
   await sql(`
-    -- Expenses table
     CREATE TABLE IF NOT EXISTS "${schemaName}".expenses (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       category_id UUID REFERENCES "${schemaName}".expense_categories(id) ON DELETE SET NULL,
@@ -185,7 +203,6 @@ export async function initializeDatabase(schemaName = 'public') {
   `);
 
   await sql(`
-    -- WhatsApp queue table
     CREATE TABLE IF NOT EXISTS "${schemaName}".whatsapp_queue (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       recipient TEXT NOT NULL,
@@ -201,7 +218,6 @@ export async function initializeDatabase(schemaName = 'public') {
   `);
 
   await sql(`
-    -- Audit log table
     CREATE TABLE IF NOT EXISTS "${schemaName}".audit_log (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID REFERENCES "${schemaName}".users(id) ON DELETE SET NULL,
@@ -217,7 +233,6 @@ export async function initializeDatabase(schemaName = 'public') {
   `);
 
   await sql(`
-    -- Sync queue table for offline mobile sync
     CREATE TABLE IF NOT EXISTS "${schemaName}".sync_queue (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID REFERENCES "${schemaName}".users(id) ON DELETE CASCADE,
@@ -231,7 +246,7 @@ export async function initializeDatabase(schemaName = 'public') {
     )
   `);
 
-  // 3. إنشاء الفهارس (Indexes) الفريدة لكل سكيما لتفادي تعارض الأسماء في قاعدة البيانات
+  // 3. إنشاء الفهارس (Indexes)
   await sql(`CREATE INDEX IF NOT EXISTS "idx_prod_bar_${schemaName}" ON "${schemaName}".products(barcode)`);
   await sql(`CREATE INDEX IF NOT EXISTS "idx_prod_cat_${schemaName}" ON "${schemaName}".products(category)`);
   await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_cust_${schemaName}" ON "${schemaName}".invoices(customer_id)`);
@@ -244,14 +259,7 @@ export async function initializeDatabase(schemaName = 'public') {
   await sql(`
     INSERT INTO "${schemaName}".expense_categories (name)
     VALUES
-      ('رواتب'),
-      ('إيجار'),
-      ('مرافق'),
-      ('مواصلات'),
-      ('صيانة'),
-      ('مشتريات مكتبية'),
-      ('تسويق'),
-      ('أخرى')
+      ('رواتب'), ('إيجار'), ('مرافق'), ('مواصلات'), ('صيانة'), ('مشتريات مكتبية'), ('تسويق'), ('أخرى')
     ON CONFLICT (name) DO NOTHING
   `);
 
