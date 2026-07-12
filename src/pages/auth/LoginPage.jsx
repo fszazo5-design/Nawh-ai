@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext.jsx'
 import { Zap, Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react'
 
+// استيراد مكتبة كابتشور (Preferences) لحفظ البيانات على أندرويد
+import { Preferences } from '@capacitor/preferences'
+
 export default function LoginPage() {
   const navigate = useNavigate()
   const { login } = useAuth()
@@ -21,14 +24,27 @@ export default function LoginPage() {
       const result = await login({ email, password })
 
       if (result.success) {
+        // === التعديل المخصص لـ أندرويد (كابتشور) ===
+        // نقوم بحفظ التوكن واسم السكيما وأي بيانات راجعة بشكل دائم في مساحة النظام
+        if (result.token) {
+          await Preferences.set({ key: 'token', value: result.token });
+        }
+        if (result.schemaName) {
+          await Preferences.set({ key: 'schemaName', value: result.schemaName });
+        }
+        if (result.user) {
+          await Preferences.set({ key: 'userData', value: JSON.stringify(result.user) });
+        }
+
         navigate('/')
       } else {
         setError(result.message || 'حدث خطأ في تسجيل الدخول')
       }
     } catch (err) {
+      console.error('Login Android Preferences Error:', err)
       setError('حدث خطأ في النظام')
     } finally {
-      setLoading(false)
+      loading && setLoading(false)
     }
   }
 
