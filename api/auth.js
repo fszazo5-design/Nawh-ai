@@ -12,7 +12,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// دالة لتنظيف وتحويل full_name لاسم سكيما مستقل وصالح وآمن لـ Postgres
+// دالة لتنظيف وتحويل الاسم لاسم سكيما مستقل وصالح وآمن لـ Postgres
 function generateSchemaName(fullName) {
   if (!fullName) return 'tenant_' + crypto.randomUUID().split('-')[0];
   
@@ -86,9 +86,15 @@ async function handleRequest(req) {
 
       // إرسال بيانات التسجيل
       if (action === 'register') {
-        const { email, password, full_name, company_name } = body;
-        if (!email || !password || !full_name) {
-          return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني، كلمة المرور والاسم الكامل مطلوبان' }, 400);
+        const { email, password } = body;
+        
+        // 🛠️ استخراج الحقول بمرونة تامة لتفادي خطأ تسمية الحقول في الواجهات (تجنب الـ 400)
+        const full_name = body.full_name || body.fullName || body.name || '';
+        const company_name = body.company_name || body.companyName || body.company || '';
+
+        // العودة لشرط التحقق الأصلي (الإيميل والباسورد فقط) لمنع كسر التوافق مع التطبيق
+        if (!email || !password) {
+          return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
         }
         if (password.length < 6) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
@@ -103,8 +109,8 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // 2. تجهيز اسم السكيما المستقل بناءً على الاسم الكامل (full_name) القادم من الواجهة
-        const schemaName = generateSchemaName(full_name);
+        // 2. تجهيز اسم السكيما المستقل بناءً على الاسم المتاح (أو إيميل المستخدم كبديل آمن في حال فراغه)
+        const schemaName = generateSchemaName(full_name || email.split('@')[0]);
 
         // 3. إنشاء السجل الأساسي في الجدول المركزي (app_users) لتوجيه تسجيل الدخول لاحقاً
         await sql`
@@ -118,7 +124,7 @@ async function handleRequest(req) {
         // 5. كتابة البيانات التفصيلية داخل جدول الـ users التابع للسكيما المنشأة حديثاً
         const result = await sql`
           INSERT INTO ${sql([schemaName, 'users'])} (id, email, password_hash, full_name, company_name, role, is_active)
-          VALUES (${userId}, ${email}, ${passwordHash}, ${full_name}, ${company_name || ''}, 'user', true)
+          VALUES (${userId}, ${email}, ${passwordHash}, ${full_name}, ${company_name}, 'user', true)
           RETURNING id, email, full_name, company_name, role, is_active, created_at
         `;
         
@@ -229,7 +235,9 @@ async function handleRequest(req) {
       const targetUserId = id || payload.userId;
 
       if (action === 'profile') {
-        const { full_name, company_name } = body;
+        const full_name = body.full_name || body.fullName || body.name || '';
+        const company_name = body.company_name || body.companyName || body.company || '';
+
         await sql`
           UPDATE ${sql([userSchema, 'users'])} SET full_name = ${full_name}, company_name = ${company_name}, updated_at = now()
           WHERE id = ${targetUserId}
