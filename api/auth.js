@@ -101,24 +101,22 @@ async function handleRequest(req) {
 
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
-        
-        // تحويل الاسم إلى اسم سكيما إنجليزي متوافق مع قواعد البيانات
         const schemaName = sanitizeSchemaName(full_name);
 
-        // 1. إنشاء السكيما المستقلة للمستخدم أولاً وتهيئة جداولها
+        // 1. إنشاء السكيما وجداولها أولاً
         await initializeDatabase(schemaName);
 
-        // 2. التحقق من عدم تكرار البريد الإلكتروني (تم إصلاح صياغة الـ Identifier المزدوج هنا)
+        // 2. التحقق من عدم تكرار البريد (باستخدام الصياغة المصفوفية المدعومة رسمياً لربط السكيما بالجدول بأمان)
         const existingUsers = await sql`
-          SELECT id FROM ${sql(schemaName)}.users WHERE email = ${email}
+          SELECT id FROM ${sql([schemaName, 'users'])} WHERE email = ${email}
         `;
         if (existingUsers.length > 0) {
           return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل في هذه السكيما' }, 400);
         }
 
-        // 3. إدراج الحساب الجديد مباشرة داخل جدول الـ users الخاص بالاسكيما المخصصة (تم إصلاح الصياغة هنا)
+        // 3. إدراج الحساب الجديد بالصيغة الصحيحة المعزولة
         const result = await sql`
-          INSERT INTO ${sql(schemaName)}.users (id, email, password_hash, full_name, company_name, role, is_active)
+          INSERT INTO ${sql([schemaName, 'users'])} (id, email, password_hash, full_name, company_name, role, is_active)
           VALUES (${userId}, ${email}, ${passwordHash}, ${full_name || ''}, ${company_name || ''}, 'user', true)
           RETURNING id, email, full_name, company_name, role, is_active, created_at
         `;
@@ -149,8 +147,8 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'MISSING_SCHEMA_HEADER', message: 'يجب تحديد اسم السكيما في الـ Headers لإجراء تسجيل الدخول' }, 400);
         }
 
-        // تم إصلاح استعلام جلب بيانات تسجيل الدخول ديناميكياً
-        const users = await sql`SELECT * FROM ${sql(activeSchema)}.users WHERE email = ${email}`;
+        // جلب بيانات تسجيل الدخول بالصيغة الآمنة
+        const users = await sql`SELECT * FROM ${sql([activeSchema, 'users'])} WHERE email = ${email}`;
         const user = users[0];
 
         if (!user || !await verifyPassword(password, user.password_hash)) {
@@ -161,7 +159,7 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'ACCOUNT_DISABLED', message: 'الحساب معطل' }, 403);
         }
 
-        await sql`UPDATE ${sql(activeSchema)}.users SET last_login = now() WHERE id = ${user.id}`;
+        await sql`UPDATE ${sql([activeSchema, 'users'])} SET last_login = now() WHERE id = ${user.id}`;
         const token = generateToken(user.id, user.email, user.role, activeSchema);
 
         return jsonResponse({
@@ -192,7 +190,7 @@ async function handleRequest(req) {
       if (action === 'me') {
         const users = await sql`
           SELECT id, email, full_name, company_name, role, is_active, last_login, created_at
-          FROM ${sql(userSchema)}.users WHERE id = ${payload.userId}
+          FROM ${sql([userSchema, 'users'])} WHERE id = ${payload.userId}
         `;
         if (users.length === 0) {
           return jsonResponse({ success: false, error: 'USER_NOT_FOUND', message: 'المستخدم غير موجود بالسكيما المحددة' }, 404);
@@ -206,7 +204,7 @@ async function handleRequest(req) {
         }
         const users = await sql`
           SELECT id, email, full_name, company_name, role, is_active, last_login, created_at
-          FROM ${sql(userSchema)}.users ORDER BY created_at DESC
+          FROM ${sql([userSchema, 'users'])} ORDER BY created_at DESC
         `;
         return jsonResponse({ success: true, data: users });
       }
@@ -227,7 +225,7 @@ async function handleRequest(req) {
       if (action === 'profile') {
         const { full_name, company_name } = body;
         await sql`
-          UPDATE ${sql(userSchema)}.users SET full_name = ${full_name}, company_name = ${company_name}, updated_at = now()
+          UPDATE ${sql([userSchema, 'users'])} SET full_name = ${full_name}, company_name = ${company_name}, updated_at = now()
           WHERE id = ${targetUserId}
         `;
         return jsonResponse({ success: true, message: 'تم تحديث الملف الشخصي داخل السكيما' });
@@ -239,7 +237,7 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور الحالية والجديدة مطلوبتان' }, 400);
         }
 
-        const users = await sql`SELECT password_hash FROM ${sql(userSchema)}.users WHERE id = ${targetUserId}`;
+        const users = await sql`SELECT password_hash FROM ${sql([userSchema, 'users'])} WHERE id = ${targetUserId}`;
         const user = users[0];
 
         if (!await verifyPassword(current_password, user.password_hash)) {
@@ -248,7 +246,7 @@ async function handleRequest(req) {
 
         const newPasswordHash = await hashPassword(new_password);
         await sql`
-          UPDATE ${sql(userSchema)}.users SET password_hash = ${newPasswordHash}, updated_at = now()
+          UPDATE ${sql([userSchema, 'users'])} SET password_hash = ${newPasswordHash}, updated_at = now()
           WHERE id = ${targetUserId}
         `;
         return jsonResponse({ success: true, message: 'تم تحديث كلمة المرور بنجاح' });
