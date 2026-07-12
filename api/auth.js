@@ -39,7 +39,7 @@ async function verifyPassword(password, hash) {
   return passwordHash === hash;
 }
 
-// توليد التوكن مع تضمين اسم السكيما للتوجيه اللاحق
+// توليد التوكن مع تضمين اسم السكيما للتوجيه اللاحق للواجهة
 function generateToken(userId, email, role, schemaName) {
   const payload = { userId, email, role, schemaName, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 };
   return btoa(JSON.stringify(payload));
@@ -89,7 +89,6 @@ async function handleRequest(req) {
       if (action === 'register') {
         const { email, password } = body;
         
-        // استخراج الحقول بمرونة تامة لتفادي خطأ تسمية الحقول في الواجهات
         const full_name = body.full_name || body.fullName || body.name || '';
         const company_name = body.company_name || body.companyName || body.company || '';
 
@@ -109,7 +108,7 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // 2. تجهيز اسم السكيما المستقل بناءً على الاسم الكامل
+        // 2. تجهيز اسم السكيما المستقل بناءً على الاسم القادم من الواجهة
         const schemaName = generateSchemaName(full_name || email.split('@')[0]);
 
         // 3. إنشاء السجل الأساسي في الجدول المركزي (app_users)
@@ -121,26 +120,24 @@ async function handleRequest(req) {
         // 4. استدعاء دالة التهيئة لإنشاء السكيما الجديدة وبناء الجداول بالداخل
         await initializeDatabase(schemaName);
 
-        // 5. جلب اتصال مخصص وموجه تلقائياً لهذه السكيما بالاعتماد على ميزة الـ search_path الذكية لديك
-        const sqlTenant = getDb(schemaName);
-        
-        // هنا يتم الاستعلام المباشر والآمن دون تمرير مصفوفات تفشل مع Neon
-        const result = await sqlTenant`
-          INSERT INTO users (id, email, password_hash, full_name, company_name, role, is_active)
-          VALUES (${userId}, ${email}, ${passwordHash}, ${full_name}, ${company_name}, 'user', true)
-          RETURNING id, email, full_name, role, is_active, created_at
-        `;
-        
-        const user = result[0];
+        // 5. توليد التوكن وإعادة البيانات مباشرة للواجهة ليتم حفظ السكيما هناك
         const token = generateToken(userId, email, 'user', schemaName);
         
         return jsonResponse({ 
           success: true, 
           data: { 
-            user: { ...user, company_name, schema_name: schemaName }, 
+            user: { 
+              id: userId, 
+              email, 
+              full_name, 
+              company_name, 
+              role: 'user', 
+              is_active: true, 
+              schema_name: schemaName 
+            }, 
             token 
           }, 
-          message: 'تم إنشاء الحساب وتخصيص السكيما بنجاح' 
+          message: 'تم إنشاء الحساب وتهيئة السكيما بنجاح' 
         }, 201);
       }
 
@@ -151,6 +148,7 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
         }
 
+        // البحث والتحقق يتم بالكامل في الجدول المركزي فقط
         const centralUsers = await sqlCentral`SELECT * FROM public.app_users WHERE email = ${email}`;
         const centralUser = centralUsers[0];
 
@@ -160,26 +158,21 @@ async function handleRequest(req) {
 
         const activeSchema = centralUser.schema_name;
 
-        // جلب اتصال السكيما الخاصة بالمستأجر للوصول لبياناته المعزولة
-        const sqlTenant = getDb(activeSchema);
-        const tenantUsers = await sqlTenant`SELECT * FROM users WHERE id = ${centralUser.id}`;
-        const user = tenantUsers[0];
+        // تحديث آخر تسجيل دخول في الجدول المركزي
+        await sqlCentral`UPDATE public.app_users SET updated_at = now() WHERE id = ${centralUser.id}`;
+        
+        const token = generateToken(centralUser.id, centralUser.email, 'user', activeSchema);
 
-        if (!user) {
-          return jsonResponse({ success: false, error: 'TENANT_NOT_FOUND', message: 'فشل الوصول إلى بيانات السكيما الخاصة بك' }, 404);
-        }
-
-        if (!user.is_active) {
-          return jsonResponse({ success: false, error: 'ACCOUNT_DISABLED', message: 'الحساب معطل' }, 403);
-        }
-
-        await sqlTenant`UPDATE users SET last_login = now() WHERE id = ${user.id}`;
-        const token = generateToken(user.id, user.email, user.role, activeSchema);
-
+        // إرجاع اسم السكيما للواجهة مباشرة لتحفظه وتوجه عملياتها إليه
         return jsonResponse({
           success: true,
           data: {
-            user: { id: user.id, email: user.email, full_name: user.full_name, company_name: user.company_name, role: user.role, schema_name: activeSchema },
+            user: { 
+              id: centralUser.id, 
+              email: centralUser.email, 
+              role: 'user', 
+              schema_name: activeSchema 
+            },
             token
           },
           message: 'تم تسجيل الدخول بنجاح'
@@ -187,8 +180,8 @@ async function handleRequest(req) {
       }
     }
 
-    // === [ GET Requests: Me & Users ] ===
-    if (req.method === 'GET') {
+    // === [ GET Requests: Me ] ===
+    if (req.method === 'GET' && action === 'me') {
       const token = authHeader?.replace('Bearer ', '');
       if (!token) {
         return jsonResponse({ success: false, error: 'NO_TOKEN', message: 'لم يتم تقديم رمز المصادقة' }, 401);
@@ -199,76 +192,19 @@ async function handleRequest(req) {
         return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح أو منتهي الصلاحية' }, 401);
       }
 
-      const userSchema = payload.schemaName;
-      const sqlTenant = getDb(userSchema);
-
-      if (action === 'me') {
-        const users = await sqlTenant`
-          SELECT id, email, full_name, company_name, role, is_active, last_login, created_at
-          FROM users WHERE id = ${payload.userId}
-        `;
-        if (users.length === 0) {
-          return jsonResponse({ success: false, error: 'USER_NOT_FOUND', message: 'المستخدم غير موجود' }, 404);
-        }
-        return jsonResponse({ success: true, data: { ...users[0], schema_name: userSchema } });
+      const centralUsers = await sqlCentral`SELECT id, email, schema_name FROM public.app_users WHERE id = ${payload.userId}`;
+      if (centralUsers.length === 0) {
+        return jsonResponse({ success: false, error: 'USER_NOT_FOUND', message: 'المستخدم غير موجود' }, 404);
       }
 
-      if (action === 'users') {
-        if (payload.role !== 'admin') {
-          return jsonResponse({ success: false, error: 'FORBIDDEN', message: 'غير مصرح لك بالوصول' }, 403);
-        }
-        const users = await sqlTenant`
-          SELECT id, email, full_name, company_name, role, is_active, last_login, created_at
-          FROM users ORDER BY created_at DESC
-        `;
-        return jsonResponse({ success: true, data: users });
-      }
-    }
-
-    // === [ PUT Requests: Profile & Password ] ===
-    if (req.method === 'PUT') {
-      const token = authHeader?.replace('Bearer ', '');
-      const payload = verifyToken(token);
-      if (!payload) {
-        return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح' }, 401);
-      }
-
-      const userSchema = payload.schemaName;
-      const sqlTenant = getDb(userSchema);
-      const body = await req.json();
-      const targetUserId = id || payload.userId;
-
-      if (action === 'profile') {
-        const full_name = body.full_name || body.fullName || body.name || '';
-        const company_name = body.company_name || body.companyName || body.company || '';
-
-        await sqlTenant`
-          UPDATE users SET full_name = ${full_name}, company_name = ${company_name}, updated_at = now()
-          WHERE id = ${targetUserId}
-        `;
-        return jsonResponse({ success: true, message: 'تم تحديث الملف الشخصي' });
-      }
-
-      if (action === 'password') {
-        const { current_password, new_password } = body;
-        if (!current_password || !new_password) {
-          return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور الحالية والجديدة مطلوبتان' }, 400);
-        }
-
-        const users = await sqlTenant`SELECT password_hash FROM users WHERE id = ${targetUserId}`;
-        const user = users[0];
-
-        if (!await verifyPassword(current_password, user.password_hash)) {
-          return jsonResponse({ success: false, error: 'INVALID_PASSWORD', message: 'كلمة المرور الحالية غير صحيحة' }, 400);
-        }
-
-        const newPasswordHash = await hashPassword(new_password);
-        
-        await sqlCentral`UPDATE public.app_users SET password_hash = ${newPasswordHash} WHERE id = ${targetUserId}`;
-        await sqlTenant`UPDATE users SET password_hash = ${newPasswordHash}, updated_at = now() WHERE id = ${targetUserId}`;
-        
-        return jsonResponse({ success: true, message: 'تم تحديث كلمة المرور بنجاح' });
-      }
+      return jsonResponse({ 
+        success: true, 
+        data: { 
+          id: centralUsers[0].id, 
+          email: centralUsers[0].email, 
+          schema_name: centralUsers[0].schema_name 
+        } 
+      });
     }
 
     return jsonResponse({ success: false, error: 'NOT_FOUND', message: 'الإجراء غير موجود' }, 404);
@@ -279,10 +215,9 @@ async function handleRequest(req) {
   }
 }
 
-// === [ التصدير المتوافق مع معايير Vercel المحدثة ] ===
+// === [ التصدير المتوافق مع معايير Vercel ] ===
 export async function GET(request) { return await handleRequest(request); }
 export async function POST(request) { return await handleRequest(request); }
-export async function PUT(request) { return await handleRequest(request); }
 export async function OPTIONS() { 
   return new Response(null, { status: 200, headers: corsHeaders }); 
 }
