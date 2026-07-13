@@ -8,6 +8,9 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { auth, processOfflineQueue } from '../services/neonService.js';
 
+// استيراد مكتبة كابتشور لضمان التخزين الدائم على بيئة الأندرويد
+import { Preferences } from '@capacitor/preferences';
+
 // إنشاء السياق
 const AuthContext = createContext(null);
 
@@ -38,6 +41,10 @@ export function AuthProvider({ children }) {
         const freshUser = await auth.getCurrentUser();
         if (freshUser.success) {
           setUser(freshUser.data);
+          // تحديث الكاش على الأندرويد بالبيانات الجديدة
+          if (freshUser.data) {
+            await Preferences.set({ key: 'userData', value: JSON.stringify(freshUser.data) });
+          }
         }
       } catch (err) {
         console.error('Error processing offline queue:', err);
@@ -63,31 +70,39 @@ export function AuthProvider({ children }) {
    */
   const initializeAuth = async () => {
     try {
-      // 1. جلب المستخدم من التخزين المحلي أولاً (سريع)
-      const localUser = await auth.getUser();
-      const hasToken = await auth.isAuthenticated();
+      // 1. جلب المستخدم والتوكن من التخزين الدائم للأندرويد
+      const { value: token } = await Preferences.get({ key: 'token' });
+      const { value: cachedUserStr } = await Preferences.get({ key: 'userData' });
+      const localUser = cachedUserStr ? JSON.parse(cachedUserStr) : await auth.getUser();
+      const hasToken = token ? true : await auth.isAuthenticated();
 
       if (localUser && hasToken) {
         setUser(localUser);
         setIsAuthenticated(true);
-        setLoading(false); // عرض البيانات المحلية فوراً
+        setLoading(false); // عرض البيانات المحلية فوراً للمستخدم لمنع التأخير
 
-        // 2. التحقق من السيرفر في الخلفية
+        // 2. التحقق من السيرفر في الخلفية لتحديث البيانات أو التحقق من الصلاحية
         try {
           const result = await auth.getCurrentUser();
           if (result.success) {
             setUser(result.data);
             setIsAuthenticated(true);
+            // تحديث البيانات المخزنة محلياً بآخر تحديث من السيرفر
+            await Preferences.set({ key: 'userData', value: JSON.stringify(result.data) });
+            
+            // تحديث السكيما والتوكن إذا أرجعهما السيرفر مجدداً لضمان التطابق
+            if (result.token) await Preferences.set({ key: 'token', value: result.token });
+            if (result.schemaName) await Preferences.set({ key: 'schemaName', value: result.schemaName });
           } else {
-            // الرمز غير صالح - مسح البيانات
+            // الرمز غير صالح أو منتهي - مسح البيانات لتجنب تعليق التطبيق
             await handleLogout();
           }
         } catch (err) {
-          // خطأ في الاتصال - البقاء على البيانات المحلية
-          console.log('Using cached user data due to network error');
+          // خطأ في الاتصال بالشبكة - البقاء على البيانات المحلية المخزنة بكابتشور
+          console.log('Using cached Android user data due to network error');
         }
       } else {
-        // لا يوجد بيانات محلية
+        // لا توجد بيانات مسجلة مسبقاً
         setUser(null);
         setIsAuthenticated(false);
       }
@@ -109,9 +124,19 @@ export function AuthProvider({ children }) {
     try {
       const result = await auth.login(credentials);
 
-      if (result.success && result.data?.user) {
-        setUser(result.data.user);
+      if (result.success && result.data) {
+        const userData = result.data.user || result.data;
+        setUser(userData);
         setIsAuthenticated(true);
+
+        // === حفظ كافة البيانات المستلمة داخل أندرويد بشكل دائم ومؤمن ===
+        if (result.data.token || result.token) {
+          await Preferences.set({ key: 'token', value: result.data.token || result.token });
+        }
+        if (result.data.schemaName || result.schemaName) {
+          await Preferences.set({ key: 'schemaName', value: result.data.schemaName || result.schemaName });
+        }
+        await Preferences.set({ key: 'userData', value: JSON.stringify(userData) });
       }
 
       return result;
@@ -134,9 +159,19 @@ export function AuthProvider({ children }) {
     try {
       const result = await auth.register(credentials);
 
-      if (result.success && result.data?.user) {
-        setUser(result.data.user);
+      if (result.success && result.data) {
+        const userData = result.data.user || result.data;
+        setUser(userData);
         setIsAuthenticated(true);
+
+        // === حفظ كافة البيانات للمستخدم الجديد داخل أندرويد دائمًا ===
+        if (result.data.token || result.token) {
+          await Preferences.set({ key: 'token', value: result.data.token || result.token });
+        }
+        if (result.data.schemaName || result.schemaName) {
+          await Preferences.set({ key: 'schemaName', value: result.data.schemaName || result.schemaName });
+        }
+        await Preferences.set({ key: 'userData', value: JSON.stringify(userData) });
       }
 
       return result;
@@ -157,17 +192,27 @@ export function AuthProvider({ children }) {
   const handleLogout = async () => {
     try {
       const result = await auth.logout();
+      
+      // مسح كافة قيم كابتشور المخزنة بالأندرويد تماماً
+      await Preferences.remove({ key: 'token' });
+      await Preferences.remove({ key: 'schemaName' });
+      await Preferences.remove({ key: 'userData' });
+
       setUser(null);
       setIsAuthenticated(false);
       return result;
     } catch (err) {
       console.error('Logout error:', err);
-      // مسح البيانات المحلية على أي حال
+      // مسح البيانات المحلية على أي حال لضمان عدم تعليق الواجهات
+      await Preferences.remove({ key: 'token' });
+      await Preferences.remove({ key: 'schemaName' });
+      await Preferences.remove({ key: 'userData' });
+      
       setUser(null);
       setIsAuthenticated(false);
       return {
         success: true,
-        message: 'تم تسجيل الخروج'
+        message: 'تم تسجيل الخروج محلياً'
       };
     }
   };
@@ -205,36 +250,34 @@ export function AuthProvider({ children }) {
   }, [user]);
 
   /**
-   * جلب المستخدم الحالي (من التخزين المحلي)
+   * جلب المستخدم الحالي (من التخزين المحلي للأندرويد)
    * @returns {object|null}
    */
   const getCurrentUser = useCallback(async () => {
+    const { value: cachedUserStr } = await Preferences.get({ key: 'userData' });
+    if (cachedUserStr) {
+      return JSON.parse(cachedUserStr);
+    }
     return auth.getUser();
   }, []);
 
-  // القيم المصدرة
+  // القيم المصدرة للـ Components والـ Hooks الأخرى
   const value = {
-    // الحالات
     user,
     loading,
     isAuthenticated,
     isOnline,
 
-    // دوال المصادقة
     login: handleLogin,
     register: handleRegister,
     logout: handleLogout,
     refreshAuth,
 
-    // دوال الصلاحيات
     hasRole,
     isAdmin,
     isManager,
 
-    // دوال مساعدة
     getCurrentUser,
-
-    // حالة الاتصال
     processOfflineQueue
   };
 
@@ -259,5 +302,4 @@ export function useAuth() {
   return context;
 }
 
-// تصدير السياق للاستخدام المباشر إذا لزم
 export default AuthContext;
