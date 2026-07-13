@@ -5,11 +5,9 @@ import { neon } from '@neondatabase/serverless';
  * Uses Neon serverless PostgreSQL with dynamic schema routing
  */
 
-// لتخزين الاتصالات المختلفة بناءً على اسم السكيما لمنع تكرار الاتصال
 const dbConnections = {};
 
 export function getDb(schemaName = 'public') {
-  // إذا كان هناك اتصال نشط مسبقاً لهذه السكيما، قم بإعادته مباشرة
   if (dbConnections[schemaName]) {
     return dbConnections[schemaName];
   }
@@ -19,27 +17,23 @@ export function getDb(schemaName = 'public') {
     throw new Error('DATABASE_URL environment variable is not set');
   }
 
-  // تنظيف الرابط وإزالة أي خيارات search_path قديمة إن وجدت
   const url = new URL(connectionString);
   url.searchParams.set('options', `-c search_path=${schemaName}`);
 
-  // إنشاء اتصال مخصص وموجه بالكامل لهذه السكيما
   dbConnections[schemaName] = neon(url.toString());
-  
   return dbConnections[schemaName];
 }
 
 /**
- * Initialize database tables inside a specific schema
+ * Initialize database tables, functions, and triggers inside a specific schema
  */
 export async function initializeDatabase(schemaName = 'public') {
-  // جلب كائن الاتصال الموجه للسكيما المستهدفة
   const sql = getDb(schemaName);
 
-  // 1. إنشاء السكيما أولاً إذا لم تكن موجودة
+  // 1. إنشاء السكيما
   await sql(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
 
-  // 2. بناء الجداول داخل السكيما المحددة
+  // 2. بناء الجداول الأساسية
   await sql(`
     CREATE TABLE IF NOT EXISTS "${schemaName}".users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -54,11 +48,9 @@ export async function initializeDatabase(schemaName = 'public') {
     )
   `);
 
-  // قيد فريد للإيميل داخل السكيما
   await sql(`ALTER TABLE "${schemaName}".users DROP CONSTRAINT IF EXISTS users_email_key`);
   await sql(`ALTER TABLE "${schemaName}".users ADD CONSTRAINT users_email_key UNIQUE (email)`);
 
-  // جدول المنتجات المطور مع ميزة تتبع الحد الأدنى ومؤشرات الكميات المخزنية
   await sql(`
     CREATE TABLE IF NOT EXISTS "${schemaName}".products (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -81,7 +73,6 @@ export async function initializeDatabase(schemaName = 'public') {
   await sql(`ALTER TABLE "${schemaName}".products DROP CONSTRAINT IF EXISTS products_barcode_key`);
   await sql(`ALTER TABLE "${schemaName}".products ADD CONSTRAINT products_barcode_key UNIQUE (barcode)`);
 
-  // جدول العملاء مع ميزان الحساب التلقائي والمديونيات
   await sql(`
     CREATE TABLE IF NOT EXISTS "${schemaName}".customers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -91,14 +82,13 @@ export async function initializeDatabase(schemaName = 'public') {
       address TEXT,
       tax_id TEXT,
       credit_limit NUMERIC(12,2) DEFAULT 0,
-      current_balance NUMERIC(12,2) DEFAULT 0.00, -- لمعرفة ديونهم الحالية لصالحنا (+)
+      current_balance NUMERIC(12,2) DEFAULT 0.00, -- ديون العميل لنا
       notes TEXT,
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMPTZ DEFAULT now()
     )
   `);
 
-  // جدول الموردين مع ميزان الحساب التلقائي ومستحقاتهم المالية
   await sql(`
     CREATE TABLE IF NOT EXISTS "${schemaName}".suppliers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -108,21 +98,20 @@ export async function initializeDatabase(schemaName = 'public') {
       address TEXT,
       tax_id TEXT,
       credit_limit NUMERIC(12,2) DEFAULT 0,
-      current_balance NUMERIC(12,2) DEFAULT 0.00, -- لمعرفة مستحقاتهم المالية المترتبة علينا (+)
+      current_balance NUMERIC(12,2) DEFAULT 0.00, -- مستحقات المورد علينا
       notes TEXT,
       is_active BOOLEAN DEFAULT true,
       created_at TIMESTAMPTZ DEFAULT now()
     )
   `);
 
-  // جدول تدفقات الصندوق وحركة الخزينة (الصادر والوارد)
   await sql(`
     CREATE TABLE IF NOT EXISTS "${schemaName}".cash_flow (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      type TEXT NOT NULL CHECK (type IN ('IN', 'OUT')), -- IN: وارد مالي (مبيعات)، OUT: صادر مالي (مشتريات ومصاريف)
+      type TEXT NOT NULL CHECK (type IN ('IN', 'OUT')),
       amount NUMERIC(12,2) NOT NULL,
       source_type TEXT NOT NULL, -- 'invoice', 'purchase', 'expense', 'manual_adjustment'
-      reference_id UUID, -- معرف الفاتورة أو عملية الشراء المرتبطة بالحركة المالي
+      reference_id UUID,
       description TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     )
@@ -177,7 +166,7 @@ export async function initializeDatabase(schemaName = 'public') {
     )
   `);
 
-  // جدول فواتير المشتريات المطور
+  // جدول فواتير المشتريات
   await sql(`
     CREATE TABLE IF NOT EXISTS "${schemaName}".purchases (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -213,7 +202,7 @@ export async function initializeDatabase(schemaName = 'public') {
     )
   `);
 
-  // جدول المصروفات المطور مع ميزة تتبع الصندوق المالية
+  // جدول المصروفات وجداول المزامنة المتبقية
   await sql(`
     CREATE TABLE IF NOT EXISTS "${schemaName}".expenses (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -271,7 +260,7 @@ export async function initializeDatabase(schemaName = 'public') {
     )
   `);
 
-  // 3. إنشاء الفهارس لضمان سرعة معالجة البيانات الفائقة (Indexes Optimization)
+  // إنشاء الفهارس
   await sql(`CREATE INDEX IF NOT EXISTS "idx_prod_bar_${schemaName}" ON "${schemaName}".products(barcode)`);
   await sql(`CREATE INDEX IF NOT EXISTS "idx_prod_cat_${schemaName}" ON "${schemaName}".products(category)`);
   await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_cust_${schemaName}" ON "${schemaName}".invoices(customer_id)`);
@@ -281,7 +270,127 @@ export async function initializeDatabase(schemaName = 'public') {
   await sql(`CREATE INDEX IF NOT EXISTS "idx_wa_status_${schemaName}" ON "${schemaName}".whatsapp_queue(status)`);
   await sql(`CREATE INDEX IF NOT EXISTS "idx_cash_flow_ref_${schemaName}" ON "${schemaName}".cash_flow(reference_id)`);
 
-  // 4. إدخال التصنيفات الافتراضية للمصاريف الخاصة بهذه السكيما
+  // =========================================================================
+  // بناء محرك العمليات الحسابية والترابط الذكي اللحظي (PL/pgSQL Trigger Functions)
+  // =========================================================================
+
+  // أ. إنشاء لغة البرمجة الإجرائية PL/pgSQL إذا لم تكن مفعلة
+  await sql(`CREATE EXTENSION IF NOT EXISTS plpgsql`);
+
+  // ب. دالة ترجر فواتير المشتريات (تحديث مخزن، ميزان موردين، وصندوق الخزينة تلقائياً)
+  await sql(`
+    CREATE OR REPLACE FUNCTION "${schemaName}".fn_trg_process_purchase_items()
+    RETURNS TRIGGER AS $$
+    DECLARE
+      p_total_amount NUMERIC(12,2);
+      p_paid_amount NUMERIC(12,2);
+      p_remaining_amount NUMERIC(12,2);
+      p_supplier_id UUID;
+      p_purchase_number TEXT;
+    BEGIN
+      -- جلب معلومات رأس فاتورة المشتريات الحالية للتحقق من المبالغ المدفوعة والمتبقية
+      SELECT total_amount, paid_amount, remaining_amount, supplier_id, purchase_number
+      INTO p_total_amount, p_paid_amount, p_remaining_amount, p_supplier_id, p_purchase_number
+      FROM "${schemaName}".purchases WHERE id = NEW.purchase_id;
+
+      -- 1. زيادة كمية المنتج تلقائياً في المخازن وتحديث "آخر سعر شراء" للمنتج
+      UPDATE "${schemaName}".products
+      SET 
+        stock_qty = stock_qty + NEW.qty,
+        cost_price = NEW.unit_cost,
+        updated_at = now()
+      WHERE id = NEW.product_id;
+
+      -- 2. في حال إدخال أول عنصر بالعملية (الترجر يعمل لكل بند)
+      -- نتحقق من عدم تكرار تسجيل كاش الصندوق أو الموردين لنفس الفاتورة
+      IF NOT EXISTS (SELECT 1 FROM "${schemaName}".cash_flow WHERE reference_id = NEW.purchase_id) THEN
+        
+        -- تسجيل حركة الخزينة الخارجة (OUT) بالمبلغ الكاش المدفوع
+        IF p_paid_amount > 0 THEN
+          INSERT INTO "${schemaName}".cash_flow (type, amount, source_type, reference_id, description)
+          VALUES ('OUT', p_paid_amount, 'purchase', NEW.purchase_id, 'دفع نقدي لفاتورة شراء رقم: ' || p_purchase_number);
+        END IF;
+
+        -- زيادة مستحقات المورد الحالية في حسابه إذا كانت الفاتورة تحتوي متبقي (آجل)
+        IF p_remaining_amount > 0 AND p_supplier_id IS NOT NULL THEN
+          UPDATE "${schemaName}".suppliers
+          SET current_balance = current_balance + p_remaining_amount
+          WHERE id = p_supplier_id;
+        END IF;
+
+      END IF;
+
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+
+  // ربط الدالة بجدول بنود المشتريات
+  await sql(`DROP TRIGGER IF EXISTS trg_after_purchase_item_insert ON "${schemaName}".purchase_items`);
+  await sql(`
+    CREATE TRIGGER trg_after_purchase_item_insert
+    AFTER INSERT ON "${schemaName}".purchase_items
+    FOR EACH ROW
+    EXECUTE FUNCTION "${schemaName}".fn_trg_process_purchase_items();
+  `);
+
+
+  // ج. دالة ترجر فواتير المبيعات (خصم المخزن، ميزان عملاء، ووارد الخزينة تلقائياً)
+  await sql(`
+    CREATE OR REPLACE FUNCTION "${schemaName}".fn_trg_process_sale_items()
+    RETURNS TRIGGER AS $$
+    DECLARE
+      s_total_amount NUMERIC(12,2);
+      s_paid_amount NUMERIC(12,2);
+      s_remaining_amount NUMERIC(12,2);
+      s_customer_id UUID;
+      s_invoice_number TEXT;
+    BEGIN
+      -- جلب معلومات رأس فاتورة المبيعات للتعامل المالي التلقائي
+      SELECT total_amount, paid_amount, remaining_amount, customer_id, invoice_number
+      INTO s_total_amount, s_paid_amount, s_remaining_amount, s_customer_id, s_invoice_number
+      FROM "${schemaName}".invoices WHERE id = NEW.invoice_id;
+
+      -- 1. خصم كمية المنتج تلقائياً من المخزون
+      UPDATE "${schemaName}".products
+      SET 
+        stock_qty = stock_qty - NEW.qty,
+        updated_at = now()
+      WHERE id = NEW.product_id;
+
+      -- 2. في حال إدخال أول بند، نسجل الحسابات والتدفق المالي لمنع تكرار الحركة مع باقي بنود نفس الفاتورة
+      IF NOT EXISTS (SELECT 1 FROM "${schemaName}".cash_flow WHERE reference_id = NEW.invoice_id) THEN
+        
+        -- تسجيل حركة الخزينة الداخلة (IN) بالمبلغ المقبوض
+        IF s_paid_amount > 0 THEN
+          INSERT INTO "${schemaName}".cash_flow (type, amount, source_type, reference_id, description)
+          VALUES ('IN', s_paid_amount, 'invoice', NEW.invoice_id, 'تحصيل نقدي لفاتورة مبيعات رقم: ' || s_invoice_number);
+        END IF;
+
+        -- زيادة مديونية العميل الحالية في حسابه إذا كان هناك مبلغ متبقي (آجل)
+        IF s_remaining_amount > 0 AND s_customer_id IS NOT NULL THEN
+          UPDATE "${schemaName}".customers
+          SET current_balance = current_balance + s_remaining_amount
+          WHERE id = s_customer_id;
+        END IF;
+
+      END IF;
+
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+
+  // ربط الدالة بجدول بنود المبيعات
+  await sql(`DROP TRIGGER IF EXISTS trg_after_sale_item_insert ON "${schemaName}".invoice_items`);
+  await sql(`
+    CREATE TRIGGER trg_after_sale_item_insert
+    AFTER INSERT ON "${schemaName}".invoice_items
+    FOR EACH ROW
+    EXECUTE FUNCTION "${schemaName}".fn_trg_process_sale_items();
+  `);
+
+  // د. إدخال تصنيفات المصاريف الافتراضية
   await sql(`
     INSERT INTO "${schemaName}".expense_categories (name)
     VALUES
@@ -289,16 +398,15 @@ export async function initializeDatabase(schemaName = 'public') {
     ON CONFLICT (name) DO NOTHING
   `);
 
-  return { success: true, message: `Database schema '${schemaName}' initialized and standardized successfully.` };
+  return { success: true, message: `Database schema '${schemaName}' initialized with Global Autopilot Database Triggers.` };
 }
 
 // ========================================================
-// محرك العمليات الحسابية المتكامل للـ ERP والحركات المترابطة
+// واجهة الـ API للتعامل الآمن مع العمليات عبر Node.js
 // ========================================================
 
 /**
  * 1. إضافة منتج جديد
- * ينشأ تلقائياً في المخزن بقيمة صفر، ويكون متاحاً فوراً
  */
 export async function createProduct(schemaName, productData) {
   const sql = getDb(schemaName);
@@ -326,16 +434,12 @@ export async function createProduct(schemaName, productData) {
 }
 
 /**
- * 2. تسجيل "فاتورة شراء جديدة" كعملية حسابية متكاملة (Transactional Process)
- * - تسجيل الفاتورة في purchases وتفاصيلها في purchase_items.
- * - زيادة كمية المنتج في products تلقائياً وتحديث "سعر الشراء الأخير".
- * - إذا كانت الفاتورة آجل (وجود متبقي)، يتم زيادة حساب المورد في suppliers تلقائياً.
- * - إذا تم دفع مبلغ كاش، يتم تسجيل حركة مالية خارجة (OUT) في جدول cash_flow فوراً.
+ * 2. إضافة فاتورة شراء
+ * بمجرد إدراج الرأس والبنود بداخل ترانزاكشن واحد، ستقوم قاعدة البيانات (Trigger) بتحديث المخازن، حساب المورد، والصندوق تلقائياً.
  */
 export async function processPurchaseInvoice(schemaName, purchaseData, items) {
   const sql = getDb(schemaName);
   
-  // نستخدم المعاملات لضمان عدم تجزئة العملية الحسابية أو حدوث خلل في الميزان في حال الفشل
   try {
     await sql('BEGIN');
 
@@ -351,46 +455,15 @@ export async function processPurchaseInvoice(schemaName, purchaseData, items) {
     `, [purchase_number, supplier_id, status || 'received', subtotal, discount_amt || 0, tax_amt || 0, total_amount, paid_amount || 0, payment_method || 'cash', notes]);
 
     const invoice = purchaseResult[0];
-    const remaining = Number(invoice.remaining_amount);
 
-    // ب) معالجة تفاصيل بنود الفاتورة وتأثيرها على المخزن
+    // ب) إدخال تفاصيل الأصناف (وسيقوم الـ Trigger في الخلفية بكافة الحسابات المخزنية والمالية)
     for (const item of items) {
-      // إدخال تفاصيل الصنف بالكامل
       await sql(`
         INSERT INTO "${schemaName}".purchase_items 
           (purchase_id, product_id, name, qty, unit_cost, total)
         VALUES 
           ($1, $2, $3, $4, $5, $6)
       `, [invoice.id, item.product_id, item.name, item.qty, item.unit_cost, item.total]);
-
-      // زيادة كمية المنتج وتحديث سعر التكلفة فورياً بأحدث سعر شراء
-      await sql(`
-        UPDATE "${schemaName}".products
-        SET 
-          stock_qty = stock_qty + $1,
-          cost_price = $2,
-          updated_at = now()
-        WHERE id = $3
-      `, [item.qty, item.unit_cost, item.product_id]);
-    }
-
-    // ج) إذا كانت الفاتورة آجل (وجود متبقي)، يتم زيادة رصيد المورد المالي دائنًا لنا
-    if (remaining > 0 && supplier_id) {
-      await sql(`
-        UPDATE "${schemaName}".suppliers
-        SET current_balance = current_balance + $1
-        WHERE id = $2
-      `, [remaining, supplier_id]);
-    }
-
-    // د) تسجيل حركة الخزينة (الصندوق) إذا تم دفع مبلغ كاش فوراً
-    if (paid_amount > 0) {
-      await sql(`
-        INSERT INTO "${schemaName}".cash_flow 
-          (type, amount, source_type, reference_id, description)
-        VALUES 
-          ('OUT', $1, 'purchase', $2, $3)
-      `, [paid_amount, invoice.id, `فاتورة شراء رقم ${purchase_number}`]);
     }
 
     await sql('COMMIT');
@@ -402,11 +475,8 @@ export async function processPurchaseInvoice(schemaName, purchaseData, items) {
 }
 
 /**
- * 3. تسجيل "فاتورة بيع جديدة" كعملية حسابية متكاملة (Transactional Process)
- * - تسجيل الفاتورة في sales (invoices) وتفاصيلها في sale_items (invoice_items).
- * - خفض كمية المنتج في products تلقائياً (المخزن).
- * - إذا كانت الفاتورة آجل (متبقي)، يتم زيادة ديون العميل في customers تلقائياً.
- * - إذا تم دفع كاش، يتم تسجيل حركة مالية داخلة (IN) في جدول cash_flow فوراً.
+ * 3. إضافة فاتورة بيع
+ * بمجرد إدراج الرأس والبنود، سيتولى الـ Trigger خصم المخزون، وتحديث ديون العميل، وتسجيل الوارد بالخزينة تلقائياً.
  */
 export async function processSaleInvoice(schemaName, saleData, items) {
   const sql = getDb(schemaName);
@@ -416,7 +486,7 @@ export async function processSaleInvoice(schemaName, saleData, items) {
 
     const { invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes } = saleData;
 
-    // أ) إدخال رأس فاتورة المبيعات
+    // أ) إدخال رأس الفاتورة
     const invoiceResult = await sql(`
       INSERT INTO "${schemaName}".invoices 
         (invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
@@ -426,45 +496,15 @@ export async function processSaleInvoice(schemaName, saleData, items) {
     `, [invoice_number, customer_id, status || 'paid', subtotal, discount_amt || 0, tax_rate || 0, tax_amt || 0, total_amount, paid_amount || 0, payment_method || 'cash', notes]);
 
     const invoice = invoiceResult[0];
-    const remaining = Number(invoice.remaining_amount);
 
-    // ب) معالجة تفاصيل بنود الفاتورة وتأثيرها على المخزن
+    // ب) إدخال تفاصيل الأصناف (وسيقوم الـ Trigger بالخصم والتسجيل التلقائي في الخزينة والعملاء)
     for (const item of items) {
-      // إدخال تفاصيل بنود البيع
       await sql(`
         INSERT INTO "${schemaName}".invoice_items 
           (invoice_id, product_id, name, qty, unit_price, discount, total)
         VALUES 
           ($1, $2, $3, $4, $5, $6, $7)
       `, [invoice.id, item.product_id, item.name, item.qty, item.unit_price, item.discount || 0, item.total]);
-
-      // خصم الكمية المباعة من المخزون فوراً
-      await sql(`
-        UPDATE "${schemaName}".products
-        SET 
-          stock_qty = stock_qty - $1,
-          updated_at = now()
-        WHERE id = $2
-      `, [item.qty, item.product_id]);
-    }
-
-    // ج) إذا كانت الفاتورة آجل (وجود متبقي)، يتم زيادة ديون العميل المستحقة لنا مدينًا (+)
-    if (remaining > 0 && customer_id) {
-      await sql(`
-        UPDATE "${schemaName}".customers
-        SET current_balance = current_balance + $1
-        WHERE id = $2
-      `, [remaining, customer_id]);
-    }
-
-    // د) تسجيل حركة خزينة الصندوق الفورية للوارد المالي المدفوع
-    if (paid_amount > 0) {
-      await sql(`
-        INSERT INTO "${schemaName}".cash_flow 
-          (type, amount, source_type, reference_id, description)
-        VALUES 
-          ('IN', $1, 'invoice', $2, $3)
-      `, [paid_amount, invoice.id, `فاتورة مبيعات رقم ${invoice_number}`]);
     }
 
     await sql('COMMIT');
@@ -476,28 +516,23 @@ export async function processSaleInvoice(schemaName, saleData, items) {
 }
 
 /**
- * 4. استعلام التقارير الموحد والذكي (Aggregations)
- * استدعاء مجمع وسريع يقرأ إجمالي المبيعات، المشتريات، الخزينة الحالية، والمصروفات المسجلة في استعلام واحد متقن.
+ * 4. استعلام التقارير المجمع الذكي والمثالي لسرعة الأداء
  */
 export async function getUnifiedDashboardReport(schemaName) {
   const sql = getDb(schemaName);
 
   const reportResult = await sql(`
     SELECT 
-      -- إجمالي المبيعات المحققة
       COALESCE(SUM(i.total_amount), 0) AS total_sales,
       COALESCE(SUM(i.paid_amount), 0) AS total_sales_collected,
       COALESCE(SUM(i.remaining_amount), 0) AS total_customer_debts,
       
-      -- إجمالي المشتريات
       (SELECT COALESCE(SUM(total_amount), 0) FROM "${schemaName}".purchases) AS total_purchases,
       (SELECT COALESCE(SUM(paid_amount), 0) FROM "${schemaName}".purchases) AS total_purchases_paid,
       (SELECT COALESCE(SUM(remaining_amount), 0) FROM "${schemaName}".purchases) AS total_supplier_credits,
 
-      -- إجمالي المصاريف العامة
       (SELECT COALESCE(SUM(amount), 0) FROM "${schemaName}".expenses) AS total_expenses,
 
-      -- الميزان الحالي المتوفر بالخزينة (جميع المدخولات ناقص جميع المدفوعات)
       (
         SELECT COALESCE(SUM(CASE WHEN type = 'IN' THEN amount ELSE -amount END), 0)
         FROM "${schemaName}".cash_flow
@@ -509,7 +544,6 @@ export async function getUnifiedDashboardReport(schemaName) {
   return reportResult[0];
 }
 
-// تصدير كافة الوظائف البرمجية والنظامية بشكل موحد
 export default { 
   getDb, 
   initializeDatabase, 
