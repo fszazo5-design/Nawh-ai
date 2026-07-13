@@ -112,14 +112,17 @@ const createResponse = (success, data = null, error = null, message = '') => ({
 async function httpRequest(options) {
   const { url, method = 'GET', data = null, extraHeaders = {} } = options;
 
-  // جلب التوكن
+  // جلب التوكن وبيانات المستخدم لاستخراج السكيما
   const token = await getToken();
+  const user = await getFromStorage(STORAGE_KEYS.USER);
+  const schemaName = user?.schemaName || user?.schema || '';
 
-  // إعداد الهيدرز - CapacitorHttp format
+  // إعداد الهيدرز الموحدة مع تضمين السكيما لحل خطأ relation does not exist
   const headers = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     ...(token && { 'Authorization': `Bearer ${token}` }),
+    ...(schemaName && { 'X-Schema-Name': schemaName }), // إرسال السكيما ديناميكياً للسيرفر
     ...extraHeaders
   };
 
@@ -160,6 +163,7 @@ async function httpRequest(options) {
         headers: {
           'Content-Type': 'application/json',
           ...(token && { 'Authorization': `Bearer ${token}` }),
+          ...(schemaName && { 'X-Schema-Name': schemaName }),
           ...extraHeaders
         },
       };
@@ -216,6 +220,8 @@ export async function processOfflineQueue() {
 
   const failed = [];
   const token = await getToken();
+  const user = await getFromStorage(STORAGE_KEYS.USER);
+  const schemaName = user?.schemaName || user?.schema || '';
 
   for (const item of queue) {
     try {
@@ -223,7 +229,10 @@ export async function processOfflineQueue() {
         url: item.url,
         method: item.method,
         data: item.data,
-        extraHeaders: token ? { 'Authorization': `Bearer ${token}` } : {}
+        extraHeaders: {
+          ...(token && { 'Authorization': `Bearer ${token}` }),
+          ...(schemaName && { 'X-Schema-Name': schemaName })
+        }
       };
 
       const result = await httpRequest(options);
