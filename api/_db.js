@@ -54,7 +54,7 @@ export async function initializeDatabase(schemaName = 'public') {
     )
   `);
 
-  // نقوم بإضافة قيد فريد (Unique constraint) مجمع للإيميل داخل السكيما لمنع التعارض مع السكيمات الأخرى
+  // قيد فريد للإيميل داخل السكيما
   await sql(`ALTER TABLE "${schemaName}".users DROP CONSTRAINT IF EXISTS users_email_key`);
   await sql(`ALTER TABLE "${schemaName}".users ADD CONSTRAINT users_email_key UNIQUE (email)`);
 
@@ -255,27 +255,26 @@ export async function initializeDatabase(schemaName = 'public') {
   await sql(`CREATE INDEX IF NOT EXISTS "idx_users_email_${schemaName}" ON "${schemaName}".users(email)`);
   await sql(`CREATE INDEX IF NOT EXISTS "idx_wa_status_${schemaName}" ON "${schemaName}".whatsapp_queue(status)`);
 
-  // ==========================================
-  // إضافة المحركات والترابط الاحترافي للـ ERP (Triggers)
-  // ==========================================
+  // ========================================================
+  // المحركات والترابط الاحترافي الديناميكي لكل سكيما على حدة
+  // ========================================================
 
-  // أ. إنشاء دالة ومُشغّل لخصم المخزون آلياً عند تسجيل عناصر فاتورة المبيعات (Invoice Items)
+  // أ. دالة ومُشغّل مبيعات الفواتير لخصم المخزن (ديناميكي بالكامل لكل حساب)
   await sql(`
     CREATE OR REPLACE FUNCTION "${schemaName}".fn_update_stock_on_sales()
     RETURNS TRIGGER AS $$
+    DECLARE
+      current_schema TEXT := TG_TABLE_SCHEMA;
     BEGIN
       IF (TG_OP = 'INSERT') THEN
-        UPDATE "${schemaName}".products 
-        SET stock_qty = stock_qty - NEW.qty, updated_at = now()
-        WHERE id = NEW.product_id;
+        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1, updated_at = now() WHERE id = $2', current_schema)
+        USING NEW.qty, NEW.product_id;
       ELSIF (TG_OP = 'UPDATE') THEN
-        UPDATE "${schemaName}".products 
-        SET stock_qty = stock_qty + OLD.qty - NEW.qty, updated_at = now()
-        WHERE id = NEW.product_id;
+        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty + $1 - $2, updated_at = now() WHERE id = $3', current_schema)
+        USING OLD.qty, NEW.qty, NEW.product_id;
       ELSIF (TG_OP = 'DELETE') THEN
-        UPDATE "${schemaName}".products 
-        SET stock_qty = stock_qty + OLD.qty, updated_at = now()
-        WHERE id = OLD.product_id;
+        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty + $1, updated_at = now() WHERE id = $2', current_schema)
+        USING OLD.qty, OLD.product_id;
       END IF;
       RETURN NULL;
     END;
@@ -289,26 +288,27 @@ export async function initializeDatabase(schemaName = 'public') {
     FOR EACH ROW EXECUTE FUNCTION "${schemaName}".fn_update_stock_on_sales();
   `);
 
-  // ب. إنشاء دالة ومُشغّل لزيادة المخزون وتحديث سعر التكلفة تلقائياً عند تسجيل المشتريات (Purchase Items)
+  // ب. دالة ومُشغّل المشتريات لزيادة المخزن وتحديث سعر التكلفة (ديناميكي بالكامل لكل حساب)
   await sql(`
     CREATE OR REPLACE FUNCTION "${schemaName}".fn_update_stock_on_purchases()
     RETURNS TRIGGER AS $$
+    DECLARE
+      current_schema TEXT := TG_TABLE_SCHEMA;
     BEGIN
       IF (TG_OP = 'INSERT') THEN
-        UPDATE "${schemaName}".products 
-        SET stock_qty = stock_qty + NEW.qty,
-            cost_price = CASE WHEN (stock_qty + NEW.qty) > 0 THEN ((cost_price * stock_qty) + (NEW.unit_cost * NEW.qty)) / (stock_qty + NEW.qty) ELSE NEW.unit_cost END,
-            updated_at = now()
-        WHERE id = NEW.product_id;
+        EXECUTE format('
+          UPDATE %I.products 
+          SET stock_qty = stock_qty + $1,
+              cost_price = CASE WHEN (stock_qty + $1) > 0 THEN ((cost_price * stock_qty) + ($2 * $1)) / (stock_qty + $1) ELSE $2 END,
+              updated_at = now()
+          WHERE id = $3', current_schema)
+        USING NEW.qty, NEW.unit_cost, NEW.product_id;
       ELSIF (TG_OP = 'UPDATE') THEN
-        UPDATE "${schemaName}".products 
-        SET stock_qty = stock_qty - OLD.qty + NEW.qty,
-            updated_at = now()
-        WHERE id = NEW.product_id;
+        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1 + $2, updated_at = now() WHERE id = $3', current_schema)
+        USING OLD.qty, NEW.qty, NEW.product_id;
       ELSIF (TG_OP = 'DELETE') THEN
-        UPDATE "${schemaName}".products 
-        SET stock_qty = stock_qty - OLD.qty, updated_at = now()
-        WHERE id = OLD.product_id;
+        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1, updated_at = now() WHERE id = $2', current_schema)
+        USING OLD.qty, OLD.product_id;
       END IF;
       RETURN NULL;
     END;
@@ -330,7 +330,7 @@ export async function initializeDatabase(schemaName = 'public') {
     ON CONFLICT (name) DO NOTHING
   `);
 
-  return { success: true, message: `Database schema '${schemaName}' initialized and professional ERP Triggers applied successfully.` };
+  return { success: true, message: `Database schema '${schemaName}' initialized and isolated ERP Triggers applied successfully.` };
 }
 
 export default { getDb, initializeDatabase };
