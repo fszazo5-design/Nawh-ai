@@ -59,7 +59,7 @@ async function handleRequest(req) {
   const id = url.searchParams.get('id');
   const action = url.searchParams.get('action');
 
-  // 1. فحص وفك التوكن لاستخراج اسم السكيما (مطلوب لجميع العمليات لمعرفة جدول من سنقرأ)
+  // 1. فحص وفك التوكن لاستخراج اسم السكيما
   const user = verifyToken(authHeader);
 
   try {
@@ -80,7 +80,7 @@ async function handleRequest(req) {
     // تحديد السكيما المستهدفة بناءً على التوكن أو الهيدر المرسل كخيار احتياطي آمن
     const targetSchema = user?.schemaName || clientSchemaHeader;
 
-    // 3. منع الدخول في حال غياب التوكن أو عدم صلاحيته (لأن كل العمليات أصبحت مخصصة لسكيما معينة)
+    // 3. منع الدخول في حال غياب التوكن أو عدم صلاحيته
     if (!targetSchema) {
       return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'جلسة العمل منتهية أو غير صالحة، يرجى إعادة تسجيل الدخول' }, 401);
     }
@@ -91,11 +91,18 @@ async function handleRequest(req) {
     // 4. استدعاء قاعدة البيانات مع تمرير اسم السكيما المستخرجة
     const sql = getDb(safeSchemaName);
 
-    // 5. التعديل المضمون لـ Neon: دمج اسم السكيما الآمن نصياً مع استعلامات الجداول لضمان الحفظ والجلب من المكان الصحيح
-    const schema = sql.createRaw ? sql.raw : (strings, ...values) => {
-      // إنشاء دالة مساعدة لربط السكيما باسم الجدول ديناميكياً وثباتها في استعلامات المخرجات
-      const newStrings = [...strings];
-      newStrings[0] = newStrings[0].replace(/(FROM|INSERT INTO|UPDATE|LEFT JOIN)\s+([a-zA-Z0-9_]+)/g, `$1 ${safeSchemaName}.$2`);
+    // 5. محرك الحقن المطور: يقوم تلقائياً بمسح الاستعلام وتوجيه الجداول بالكامل للسكيما الحالية آلياً وبدون أخطاء
+    const schema = (strings, ...values) => {
+      const newStrings = strings.map(str => {
+        return str.replace(
+          /(FROM|INSERT INTO|UPDATE|LEFT JOIN|JOIN)\s+([a-zA-Z0-9_]+)/gi, 
+          (match, op, tableName) => {
+            // استثناء الكلمات المحجوزة التي قد تشبه أسماء الجداول
+            if (['select', 'where', 'set', 'on'].includes(tableName.toLowerCase())) return match;
+            return `${op} "${safeSchemaName}"."${tableName}"`;
+          }
+        );
+      });
       return sql(newStrings, ...values);
     };
 
@@ -277,6 +284,7 @@ async function handleRequest(req) {
               INSERT INTO invoice_items (id, invoice_id, product_id, name, qty, unit_price, discount, total) 
               VALUES (${itemId}, ${invoice.id}, ${item.product_id || null}, ${item.name}, ${item.qty}, ${item.unit_price}, ${item.discount || 0}, ${item.total})
             `;
+            // ملاحظة: تم إزالة تحديث المخزن اليدوي من هنا لأن الـ Trigger يتكفل به داخل السكيما تلقائياً وبأمان كامل.
           }
         }
         return jsonResponse({ success: true, data: invoice }, 201);
@@ -329,9 +337,7 @@ async function handleRequest(req) {
               INSERT INTO purchase_items (id, purchase_id, product_id, name, qty, unit_cost, total) 
               VALUES (${itemId}, ${purchase.id}, ${item.product_id || null}, ${item.name}, ${item.qty}, ${item.unit_cost}, ${item.total})
             `;
-            if (item.product_id) {
-              await schema`UPDATE products SET stock_qty = stock_qty + ${item.qty}, updated_at = now() WHERE id = ${item.product_id}`;
-            }
+            // ملاحظة: الـ Trigger المحقن داخل قاعدة البيانات سيقوم بزيادة الكميات وتعديل متوسط سعر التكلفة تلقائياً بمجرد حقن العنصر.
           }
         }
         return jsonResponse({ success: true, data: purchase }, 201);
