@@ -10,7 +10,7 @@ import { getDb, initializeDatabase } from './_db.js';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, X-Schema-Name',
 };
 
 // Response helper المتوافق مع معايير الويب الحديثة
@@ -52,6 +52,7 @@ function generatePurchaseNumber() {
 async function handleRequest(req) {
   const host = typeof req.headers.get === 'function' ? req.headers.get('host') : (req.headers?.host || 'localhost');
   const authHeader = typeof req.headers.get === 'function' ? req.headers.get('authorization') : (req.headers?.authorization);
+  const clientSchemaHeader = typeof req.headers.get === 'function' ? req.headers.get('x-schema-name') : (req.headers?.['x-schema-name']);
 
   const url = new URL(req.url, `https://${host}`);
   const table = url.searchParams.get('table');
@@ -64,7 +65,7 @@ async function handleRequest(req) {
   try {
     // 2. معالجة تهيئة السكيما (إن وجدت)
     if (action === 'init-db' || table === 'init-db') {
-      const schemaToInit = user?.schemaName || url.searchParams.get('schema');
+      const schemaToInit = user?.schemaName || clientSchemaHeader || url.searchParams.get('schema');
       if (!schemaToInit) {
         return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'اسم السكيما مطلوب للتهيئة' }, 400);
       }
@@ -76,13 +77,19 @@ async function handleRequest(req) {
       }
     }
 
+    // تحديد السكيما المستهدفة بناءً على التوكن أو الهيدر المرسل كخيار احتياطي آمن
+    const targetSchema = user?.schemaName || clientSchemaHeader;
+
     // 3. منع الدخول في حال غياب التوكن أو عدم صلاحيته (لأن كل العمليات أصبحت مخصصة لسكيما معينة)
-    if (!user || !user.schemaName) {
+    if (!targetSchema) {
       return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'جلسة العمل منتهية أو غير صالحة، يرجى إعادة تسجيل الدخول' }, 401);
     }
 
-    // 4. استدعاء قاعدة البيانات مع تمرير اسم السكيما المستخرجة من التوكن تلقائياً لتوجه الاستعلامات للمكان الصحيح
-    const sql = getDb(user.schemaName);
+    // 4. استدعاء قاعدة البيانات مع تمرير اسم السكيما المستخرجة
+    const sql = getDb(targetSchema);
+
+    // 5. إجبار الجلسة الحالية لقاعدة البيانات على التوجه تلقائياً للسكيما الخاصة بالمستخدم لمنع خطأ relation does not exist
+    await sql`SET search_path TO ${sql(targetSchema)}, public`;
 
     // قراءة الـ body تلقائياً من الـ Web Request
     let body = {};
@@ -498,7 +505,7 @@ async function handleRequest(req) {
   }
 }
 
-// === [ التصدير المتوافق مع معايير Vercel ] ===
+// === [ التصدير المتوافق مع معمعايير Vercel ] ===
 export async function GET(request) { return await handleRequest(request); }
 export async function POST(request) { return await handleRequest(request); }
 export async function PUT(request) { return await handleRequest(request); }
