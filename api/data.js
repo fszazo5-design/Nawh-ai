@@ -85,11 +85,14 @@ async function handleRequest(req) {
       return jsonResponse({ success: false, error: 'UNAUTHORIZED', message: 'جلسة العمل منتهية أو غير صالحة، يرجى إعادة تسجيل الدخول' }, 401);
     }
 
-    // 4. استدعاء قاعدة البيانات مع تمرير اسم السكيما المستخرجة
-    const sql = getDb(targetSchema);
+    // تنظيف اسم السكيما للتأكد من خلوه من الرموز الخبيثة لحماية قاعدة البيانات قبل الدمج النصي
+    const safeSchemaName = targetSchema.replace(/[^a-zA-Z0-9_]/g, '');
 
-    // 5. إجبار الجلسة الحالية لقاعدة البيانات على التوجه تلقائياً للسكيما الخاصة بالمستخدم لمنع خطأ relation does not exist
-    await sql`SET search_path TO ${sql(targetSchema)}, public`;
+    // 4. استدعاء قاعدة البيانات مع تمرير اسم السكيما المستخرجة
+    const sql = getDb(safeSchemaName);
+
+    // 5. تعديل السطر المسبب للمشكلة: استخدام دمج نصي آمن لتفادي خطأ الـ syntax عند عمل SET داخل Neon
+    await sql.unsafe(`SET search_path TO ${safeSchemaName}, public`);
 
     // قراءة الـ body تلقائياً من الـ Web Request
     let body = {};
@@ -505,7 +508,7 @@ async function handleRequest(req) {
   }
 }
 
-// === [ التصدير المتوافق مع معمعايير Vercel ] ===
+// === [ التصدير المتوافق مع معايير Vercel ] ===
 export async function GET(request) { return await handleRequest(request); }
 export async function POST(request) { return await handleRequest(request); }
 export async function PUT(request) { return await handleRequest(request); }
