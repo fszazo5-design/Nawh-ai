@@ -256,76 +256,25 @@ export async function initializeDatabase(schemaName = 'public') {
   await sql(`CREATE INDEX IF NOT EXISTS "idx_wa_status_${schemaName}" ON "${schemaName}".whatsapp_queue(status)`);
 
   // ========================================================
-  // المحركات والترابط الاحترافي الديناميكي لكل سكيما على حدة
+  // المحركات والترابط الاحترافي المعياري الموحد لكل سكيما
   // ========================================================
 
-  // أ. دالة ومُشغّل مبيعات الفواتير لخصم المخزن (تم تعديل إرجاع الصف لضمان تنفيذ العملية)
-  await sql(`
-    CREATE OR REPLACE FUNCTION "${schemaName}".fn_update_stock_on_sales()
-    RETURNS TRIGGER AS $$
-    DECLARE
-      current_schema TEXT := TG_TABLE_SCHEMA;
-    BEGIN
-      IF (TG_OP = 'INSERT') THEN
-        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1, updated_at = now() WHERE id = $2', current_schema)
-        USING NEW.qty, NEW.product_id;
-        RETURN NEW;
-      ELSIF (TG_OP = 'UPDATE') THEN
-        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty + $1 - $2, updated_at = now() WHERE id = $3', current_schema)
-        USING OLD.qty, NEW.qty, NEW.product_id;
-        RETURN NEW;
-      ELSIF (TG_OP = 'DELETE') THEN
-        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty + $1, updated_at = now() WHERE id = $2', current_schema)
-        USING OLD.qty, OLD.product_id;
-        RETURN OLD;
-      END IF;
-      RETURN NULL;
-    END;
-    $$ LANGUAGE plpgsql;
-  `);
-
+  // أ. ربط جدول مبيعات السكيما الجديدة بالدالة العامة الموجودة في الـ public
   await sql(`DROP TRIGGER IF EXISTS trg_update_stock_sales ON "${schemaName}".invoice_items`);
   await sql(`
     CREATE TRIGGER trg_update_stock_sales
     AFTER INSERT OR UPDATE OR DELETE ON "${schemaName}".invoice_items
-    FOR EACH ROW EXECUTE FUNCTION "${schemaName}".fn_update_stock_on_sales();
+    FOR EACH ROW 
+    EXECUTE FUNCTION public.fn_global_update_stock_on_sales();
   `);
 
-  // ب. دالة ومُشغّل المشتريات لزيادة المخزن وتحديث سعر التكلفة (تم تعديل إرجاع الصف لضمان تنفيذ العملية)
-  await sql(`
-    CREATE OR REPLACE FUNCTION "${schemaName}".fn_update_stock_on_purchases()
-    RETURNS TRIGGER AS $$
-    DECLARE
-      current_schema TEXT := TG_TABLE_SCHEMA;
-    BEGIN
-      IF (TG_OP = 'INSERT') THEN
-        EXECUTE format('
-          UPDATE %I.products 
-          SET stock_qty = stock_qty + $1,
-              cost_price = CASE WHEN (stock_qty + $1) > 0 THEN ((cost_price * stock_qty) + ($2 * $1)) / (stock_qty + $1) ELSE $2 END,
-              updated_at = now()
-          WHERE id = $3', current_schema)
-        USING NEW.qty, NEW.unit_cost, NEW.product_id;
-        RETURN NEW;
-      ELSIF (TG_OP = 'UPDATE') THEN
-        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1 + $2, updated_at = now() WHERE id = $3', current_schema)
-        USING OLD.qty, NEW.qty, NEW.product_id;
-        RETURN NEW;
-      ELSIF (TG_OP = 'DELETE') THEN
-        EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1, updated_at = now() WHERE id = $2', current_schema)
-        USING OLD.qty, OLD.product_id;
-        RETURN OLD;
-      END IF;
-      RETURN NULL;
-    END;
-    $$ LANGUAGE plpgsql;
-  `);
-
+  // ب. ربط جدول مشتريات السكيما الجديدة بالدالة العامة الموجودة في الـ public
   await sql(`DROP TRIGGER IF EXISTS trg_update_stock_purchases ON "${schemaName}".purchase_items`);
   await sql(`
     CREATE TRIGGER trg_update_stock_purchases
     AFTER INSERT OR UPDATE OR DELETE ON "${schemaName}".purchase_items
-    FOR EACH ROW EXECUTE FUNCTION "${schemaName}".fn_update_stock_on_purchases();
+    FOR EACH ROW 
+    EXECUTE FUNCTION public.fn_global_update_stock_on_purchases();
   `);
 
   // 4. إدخال التصنيفات الافتراضية للمصاريف الخاصة بهذه السكيما
@@ -336,7 +285,7 @@ export async function initializeDatabase(schemaName = 'public') {
     ON CONFLICT (name) DO NOTHING
   `);
 
-  return { success: true, message: `Database schema '${schemaName}' initialized and isolated ERP Triggers applied successfully.` };
+  return { success: true, message: `Database schema '${schemaName}' initialized and standardized Global Triggers linked successfully.` };
 }
 
 export default { getDb, initializeDatabase };
