@@ -259,7 +259,7 @@ export async function initializeDatabase(schemaName = 'public') {
   // المحركات والترابط الاحترافي الديناميكي لكل سكيما على حدة
   // ========================================================
 
-  // أ. دالة ومُشغّل مبيعات الفواتير لخصم المخزن (ديناميكي بالكامل لكل حساب)
+  // أ. دالة ومُشغّل مبيعات الفواتير لخصم المخزن (تم تعديل إرجاع الصف لضمان تنفيذ العملية)
   await sql(`
     CREATE OR REPLACE FUNCTION "${schemaName}".fn_update_stock_on_sales()
     RETURNS TRIGGER AS $$
@@ -269,12 +269,15 @@ export async function initializeDatabase(schemaName = 'public') {
       IF (TG_OP = 'INSERT') THEN
         EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1, updated_at = now() WHERE id = $2', current_schema)
         USING NEW.qty, NEW.product_id;
+        RETURN NEW;
       ELSIF (TG_OP = 'UPDATE') THEN
         EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty + $1 - $2, updated_at = now() WHERE id = $3', current_schema)
         USING OLD.qty, NEW.qty, NEW.product_id;
+        RETURN NEW;
       ELSIF (TG_OP = 'DELETE') THEN
         EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty + $1, updated_at = now() WHERE id = $2', current_schema)
         USING OLD.qty, OLD.product_id;
+        RETURN OLD;
       END IF;
       RETURN NULL;
     END;
@@ -288,7 +291,7 @@ export async function initializeDatabase(schemaName = 'public') {
     FOR EACH ROW EXECUTE FUNCTION "${schemaName}".fn_update_stock_on_sales();
   `);
 
-  // ب. دالة ومُشغّل المشتريات لزيادة المخزن وتحديث سعر التكلفة (ديناميكي بالكامل لكل حساب)
+  // ب. دالة ومُشغّل المشتريات لزيادة المخزن وتحديث سعر التكلفة (تم تعديل إرجاع الصف لضمان تنفيذ العملية)
   await sql(`
     CREATE OR REPLACE FUNCTION "${schemaName}".fn_update_stock_on_purchases()
     RETURNS TRIGGER AS $$
@@ -303,12 +306,15 @@ export async function initializeDatabase(schemaName = 'public') {
               updated_at = now()
           WHERE id = $3', current_schema)
         USING NEW.qty, NEW.unit_cost, NEW.product_id;
+        RETURN NEW;
       ELSIF (TG_OP = 'UPDATE') THEN
         EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1 + $2, updated_at = now() WHERE id = $3', current_schema)
         USING OLD.qty, NEW.qty, NEW.product_id;
+        RETURN NEW;
       ELSIF (TG_OP = 'DELETE') THEN
         EXECUTE format('UPDATE %I.products SET stock_qty = stock_qty - $1, updated_at = now() WHERE id = $2', current_schema)
         USING OLD.qty, OLD.product_id;
+        RETURN OLD;
       END IF;
       RETURN NULL;
     END;
