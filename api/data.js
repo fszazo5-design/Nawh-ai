@@ -91,8 +91,8 @@ async function handleRequest(req) {
     // 4. استدعاء قاعدة البيانات مع تمرير اسم السكيما المستخرجة
     const sql = getDb(safeSchemaName);
 
-    // 5. تعديل السطر المسبب للمشكلة: استخدام دمج نصي آمن لتفادي خطأ الـ syntax عند عمل SET داخل Neon
-    await sql.unsafe(`SET search_path TO ${safeSchemaName}, public`);
+    // 5. التعديل الصحيح: تنفيذ تعيين الـ search_path بشكل متوافق مع Neon بعد التأكد من أمان النص
+    await sql(`SET search_path TO ${safeSchemaName}, public`);
 
     // قراءة الـ body تلقائياً من الـ Web Request
     let body = {};
