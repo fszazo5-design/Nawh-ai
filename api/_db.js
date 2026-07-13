@@ -255,6 +255,73 @@ export async function initializeDatabase(schemaName = 'public') {
   await sql(`CREATE INDEX IF NOT EXISTS "idx_users_email_${schemaName}" ON "${schemaName}".users(email)`);
   await sql(`CREATE INDEX IF NOT EXISTS "idx_wa_status_${schemaName}" ON "${schemaName}".whatsapp_queue(status)`);
 
+  // ==========================================
+  // إضافة المحركات والترابط الاحترافي للـ ERP (Triggers)
+  // ==========================================
+
+  // أ. إنشاء دالة ومُشغّل لخصم المخزون آلياً عند تسجيل عناصر فاتورة المبيعات (Invoice Items)
+  await sql(`
+    CREATE OR REPLACE FUNCTION "${schemaName}".fn_update_stock_on_sales()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      IF (TG_OP = 'INSERT') THEN
+        UPDATE "${schemaName}".products 
+        SET stock_qty = stock_qty - NEW.qty, updated_at = now()
+        WHERE id = NEW.product_id;
+      ELSIF (TG_OP = 'UPDATE') THEN
+        UPDATE "${schemaName}".products 
+        SET stock_qty = stock_qty + OLD.qty - NEW.qty, updated_at = now()
+        WHERE id = NEW.product_id;
+      ELSIF (TG_OP = 'DELETE') THEN
+        UPDATE "${schemaName}".products 
+        SET stock_qty = stock_qty + OLD.qty, updated_at = now()
+        WHERE id = OLD.product_id;
+      END IF;
+      RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+
+  await sql(`DROP TRIGGER IF EXISTS trg_update_stock_sales ON "${schemaName}".invoice_items`);
+  await sql(`
+    CREATE TRIGGER trg_update_stock_sales
+    AFTER INSERT OR UPDATE OR DELETE ON "${schemaName}".invoice_items
+    FOR EACH ROW EXECUTE FUNCTION "${schemaName}".fn_update_stock_on_sales();
+  `);
+
+  // ب. إنشاء دالة ومُشغّل لزيادة المخزون وتحديث سعر التكلفة تلقائياً عند تسجيل المشتريات (Purchase Items)
+  await sql(`
+    CREATE OR REPLACE FUNCTION "${schemaName}".fn_update_stock_on_purchases()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      IF (TG_OP = 'INSERT') THEN
+        UPDATE "${schemaName}".products 
+        SET stock_qty = stock_qty + NEW.qty,
+            cost_price = CASE WHEN (stock_qty + NEW.qty) > 0 THEN ((cost_price * stock_qty) + (NEW.unit_cost * NEW.qty)) / (stock_qty + NEW.qty) ELSE NEW.unit_cost END,
+            updated_at = now()
+        WHERE id = NEW.product_id;
+      ELSIF (TG_OP = 'UPDATE') THEN
+        UPDATE "${schemaName}".products 
+        SET stock_qty = stock_qty - OLD.qty + NEW.qty,
+            updated_at = now()
+        WHERE id = NEW.product_id;
+      ELSIF (TG_OP = 'DELETE') THEN
+        UPDATE "${schemaName}".products 
+        SET stock_qty = stock_qty - OLD.qty, updated_at = now()
+        WHERE id = OLD.product_id;
+      END IF;
+      RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+
+  await sql(`DROP TRIGGER IF EXISTS trg_update_stock_purchases ON "${schemaName}".purchase_items`);
+  await sql(`
+    CREATE TRIGGER trg_update_stock_purchases
+    AFTER INSERT OR UPDATE OR DELETE ON "${schemaName}".purchase_items
+    FOR EACH ROW EXECUTE FUNCTION "${schemaName}".fn_update_stock_on_purchases();
+  `);
+
   // 4. إدخال التصنيفات الافتراضية للمصاريف الخاصة بهذه السكيما
   await sql(`
     INSERT INTO "${schemaName}".expense_categories (name)
@@ -263,7 +330,7 @@ export async function initializeDatabase(schemaName = 'public') {
     ON CONFLICT (name) DO NOTHING
   `);
 
-  return { success: true, message: `Database schema '${schemaName}' initialized successfully` };
+  return { success: true, message: `Database schema '${schemaName}' initialized and professional ERP Triggers applied successfully.` };
 }
 
 export default { getDb, initializeDatabase };
