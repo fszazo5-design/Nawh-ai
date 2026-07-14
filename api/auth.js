@@ -1,4 +1,4 @@
-import { getDb, initializeDatabase } from './_db.js';
+import { getDb } from './_db.js';
 
 /**
  * Auth API Endpoint (Vercel Web Fetch API Style)
@@ -11,19 +11,6 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
-
-// دالة لتنظيف وتحويل الاسم لاسم سكيما مستقل وصالح وآمن لـ Postgres
-function generateSchemaName(fullName) {
-  if (!fullName) return 'tenant_' + crypto.randomUUID().split('-')[0];
-  
-  let safeName = fullName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_\u0600-\u06FF]/g, '_') // يدعم الحروف العربية والإنجليزية والأرقام
-    .replace(/^[^a-z_\u0600-\u06FF]/, '_');    // يجب أن تبدأ السكيما بحرف وليس رقم
-    
-  return safeName || 'tenant_' + crypto.randomUUID().split('-')[0];
-}
 
 // Simple hash function (Web Crypto API)
 async function hashPassword(password) {
@@ -39,8 +26,8 @@ async function verifyPassword(password, hash) {
   return passwordHash === hash;
 }
 
-// توليد التوكن مع تضمين اسم السكيما للتوجيه اللاحق للواجهة
-function generateToken(userId, email, role, schemaName) {
+// توليد التوكن مع توجيه العمليات إلى السكيما الافتراضية 'pos'
+function generateToken(userId, email, role, schemaName = 'pos') {
   const payload = { userId, email, role, schemaName, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 };
   return btoa(JSON.stringify(payload));
 }
@@ -65,7 +52,7 @@ function jsonResponse(data, status = 200) {
 
 // الدالة الرئيسية الموحدة لمعالجة العمليات
 async function handleRequest(req) {
-  // الاتصال الافتراضي المركزي بالسكيما العامة public
+  // الاتصال الافتراضي المركزي بالسكيما العامة public لعملية تسجيل الدخول/الاشتراك
   const sqlCentral = getDb('public');
   
   const host = typeof req.headers.get === 'function' 
@@ -78,7 +65,6 @@ async function handleRequest(req) {
 
   const url = new URL(req.url, `https://${host}`);
   const action = url.searchParams.get('action') || 'me';
-  const id = url.searchParams.get('id'); 
 
   try {
     // === [ POST Requests: Login & Register ] ===
@@ -99,7 +85,7 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
         }
 
-        // 1. الفحص المركزي في جدول الحسابات الموحد (السكيما الافتراضية)
+        // 1. الفحص المركزي في جدول الحسابات الموحد لضمان عدم تكرار الحساب
         const existingUsers = await sqlCentral`SELECT id FROM public.app_users WHERE email = ${email}`;
         if (existingUsers.length > 0) {
           return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل على المنصة' }, 400);
@@ -108,8 +94,8 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // 2. تجهيز اسم السكيما المستقل بناءً على الاسم القادم من الواجهة
-        const schemaName = generateSchemaName(full_name || email.split('@')[0]);
+        // 2. ربط المستخدم الجديد بالسكيما الجاهزة والجاري استخدامها 'pos' مباشرة
+        const schemaName = 'pos';
 
         // 3. إنشاء السجل الأساسي في الجدول المركزي (app_users)
         await sqlCentral`
@@ -117,10 +103,7 @@ async function handleRequest(req) {
           VALUES (${userId}, ${email}, ${passwordHash}, ${schemaName})
         `;
 
-        // 4. استدعاء دالة التهيئة لإنشاء السكيما الجديدة وبناء الجداول بالداخل
-        await initializeDatabase(schemaName);
-
-        // 5. توليد التوكن وإعادة البيانات مباشرة للواجهة ليتم حفظ السكيما هناك
+        // 4. توليد التوكن وإعادة البيانات مباشرة للواجهة
         const token = generateToken(userId, email, 'user', schemaName);
         
         return jsonResponse({ 
@@ -137,7 +120,7 @@ async function handleRequest(req) {
             }, 
             token 
           }, 
-          message: 'تم إنشاء الحساب وتهيئة السكيما بنجاح' 
+          message: 'تم إنشاء الحساب وربطه بنظام المبيعات والمخازن بنجاح' 
         }, 201);
       }
 
@@ -156,19 +139,16 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'INVALID_CREDENTIALS', message: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' }, 401);
         }
 
-        const activeSchema = centralUser.schema_name;
+        const activeSchema = centralUser.schema_name || 'pos';
 
-        // تصحيح الخطأ: تم استبدال الحقل غير الموجود updated_at بالحقل القياسي last_login لتجنب انهيار الاتصال
         try {
           await sqlCentral`UPDATE public.app_users SET last_login = now() WHERE id = ${centralUser.id}`;
         } catch (updateError) {
-          // خطة بديلة (Fallback) في حال عدم توفر حقل last_login أيضاً في السكيما لتفادي توقف الدخول كلياً
           console.warn('Warning: Could not update login timestamp', updateError.message);
         }
         
         const token = generateToken(centralUser.id, centralUser.email, 'user', activeSchema);
 
-        // إرجاع اسم السكيما للواجهة مباشرة لتحفظه وتوجه عملياتها إليه
         return jsonResponse({
           success: true,
           data: {
@@ -207,7 +187,7 @@ async function handleRequest(req) {
         data: { 
           id: centralUsers[0].id, 
           email: centralUsers[0].email, 
-          schema_name: centralUsers[0].schema_name 
+          schema_name: centralUsers[0].schema_name || 'pos' 
         } 
       });
     }
