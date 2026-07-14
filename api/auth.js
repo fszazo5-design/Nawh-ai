@@ -2,7 +2,6 @@ import { getDb } from './_db.js';
 
 /**
  * Auth API Endpoint (Vercel Web Fetch API Style)
- * متوافق تماماً مع مشاريع Vite و منصات الأندرويد وقواعد بيانات Neon
  */
 
 // CORS headers
@@ -12,7 +11,19 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// Simple hash function (Web Crypto API)
+// دالة لتنظيف وتحويل الاسم لاسم سكيما مستقل وصالح لـ Postgres
+function generateSchemaName(fullName) {
+  if (!fullName) return 'tenant_' + crypto.randomUUID().split('-')[0];
+  
+  let safeName = fullName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_') // لضمان التوافق التام مع أسماء السكيما يفضل الحروف الإنجليزية والأرقام
+    .replace(/^[^a-z_]/, '_');   
+    
+  return safeName || 'tenant_' + crypto.randomUUID().split('-')[0];
+}
+
 async function hashPassword(password) {
   const encoder = new TextEncoder();
   const data = encoder.encode(password + (process.env.AUTH_SECRET || 'nawh-secret-key'));
@@ -26,8 +37,7 @@ async function verifyPassword(password, hash) {
   return passwordHash === hash;
 }
 
-// توليد التوكن مع توجيه العمليات إلى السكيما الافتراضية 'pos'
-function generateToken(userId, email, role, schemaName = 'pos') {
+function generateToken(userId, email, role, schemaName) {
   const payload = { userId, email, role, schemaName, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 };
   return btoa(JSON.stringify(payload));
 }
@@ -42,7 +52,6 @@ function verifyToken(token) {
   }
 }
 
-// Response helper المتوافق مع معايير الويب
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -50,42 +59,31 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// الدالة الرئيسية الموحدة لمعالجة العمليات
+// الدالة الرئيسية
 async function handleRequest(req) {
-  // الاتصال الافتراضي المركزي بالسكيما العامة public لعملية تسجيل الدخول/الاشتراك
   const sqlCentral = getDb('public');
   
-  const host = typeof req.headers.get === 'function' 
-    ? req.headers.get('host') 
-    : (req.headers?.host || 'localhost');
-    
-  const authHeader = typeof req.headers.get === 'function' 
-    ? req.headers.get('authorization') 
-    : (req.headers?.authorization || req.headers?.['authorization']);
+  const host = typeof req.headers.get === 'function' ? req.headers.get('host') : (req.headers?.host || 'localhost');
+  const authHeader = typeof req.headers.get === 'function' ? req.headers.get('authorization') : (req.headers?.authorization);
 
   const url = new URL(req.url, `https://${host}`);
   const action = url.searchParams.get('action') || 'me';
 
   try {
-    // === [ POST Requests: Login & Register ] ===
     if (req.method === 'POST') {
       const body = await req.json();
 
-      // إرسال بيانات التسجيل
+      // === الاشتراك وتوليد سكيما الحساب ===
       if (action === 'register') {
         const { email, password } = body;
-        
         const full_name = body.full_name || body.fullName || body.name || '';
         const company_name = body.company_name || body.companyName || body.company || '';
 
         if (!email || !password) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
         }
-        if (password.length < 6) {
-          return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' }, 400);
-        }
 
-        // 1. الفحص المركزي في جدول الحسابات الموحد لضمان عدم تكرار الحساب
+        // 1. الفحص المركزي
         const existingUsers = await sqlCentral`SELECT id FROM public.app_users WHERE email = ${email}`;
         if (existingUsers.length > 0) {
           return jsonResponse({ success: false, error: 'USER_EXISTS', message: 'المستخدم موجود بالفعل على المنصة' }, 400);
@@ -94,44 +92,54 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // 2. ربط المستخدم الجديد بالسكيما الجاهزة والجاري استخدامها 'pos' مباشرة
-        const schemaName = 'pos';
+        // 2. توليد اسم السكيما الخاص بالحساب
+        const schemaName = generateSchemaName(full_name || email.split('@')[0]);
 
-        // 3. إنشاء السجل الأساسي في الجدول المركزي (app_users)
+        // 3. إنشاء السجل في الجدول المركزي
         await sqlCentral`
           INSERT INTO public.app_users (id, email, password_hash, schema_name)
           VALUES (${userId}, ${email}, ${passwordHash}, ${schemaName})
         `;
 
-        // 4. توليد التوكن وإعادة البيانات مباشرة للواجهة
+        // 4. السحر هنا: إنشاء سكيما جديدة واستنساخ الجداول والتريجرات من السكيما "pos" الجاهزة فوراً بـ 3 أسطر فقط وبسرعة خارقة!
+        await sqlCentral`CREATE SCHEMA "${sqlCentral(schemaName)}"`;
+        
+        // أمر Postgres السريع لنسخ هيكل الجداول من السكيما النموذجية pos إلى السكيما الجديدة
+        await sqlCentral`
+          DO $$ 
+          DECLARE 
+            r RECORD; 
+          BEGIN 
+            FOR r IN (SELECT table_name FROM information_schema.tables WHERE table_schema = 'pos') LOOP 
+              EXECUTE 'CREATE TABLE "' || ${schemaName} || '"."' || r.table_name || '" (LIKE "pos"."' || r.table_name || '" INCLUDING ALL)'; 
+            END LOOP; 
+          END $$;
+        `;
+
+        // دحرجة تصنيفات المصاريف الافتراضية للسكيما الجديدة
+        await sqlCentral`
+          INSERT INTO "${sqlCentral(schemaName)}".expense_categories (name)
+          VALUES ('رواتب'), ('إيجار'), ('مرافق'), ('مواصلات'), ('صيانة'), ('مشتريات مكتبية'), ('تسويق'), ('أخرى')
+          ON CONFLICT DO NOTHING
+        `;
+
+        // 5. توليد التوكن وإعادة البيانات
         const token = generateToken(userId, email, 'user', schemaName);
         
         return jsonResponse({ 
           success: true, 
-          data: { 
-            user: { 
-              id: userId, 
-              email, 
-              full_name, 
-              company_name, 
-              role: 'user', 
-              is_active: true, 
-              schema_name: schemaName 
-            }, 
-            token 
-          }, 
-          message: 'تم إنشاء الحساب وربطه بنظام المبيعات والمخازن بنجاح' 
+          data: { user: { id: userId, email, full_name, company_name, role: 'user', is_active: true, schema_name: schemaName }, token }, 
+          message: 'تم إنشاء الحساب وتهيئة السكيما الخاصة بك بنجاح' 
         }, 201);
       }
 
-      // تسجيل الدخول
+      // === تسجيل الدخول ===
       if (action === 'login') {
         const { email, password } = body;
         if (!email || !password) {
           return jsonResponse({ success: false, error: 'VALIDATION_ERROR', message: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, 400);
         }
 
-        // البحث والتحقق يتم بالكامل في الجدول المركزي فقط
         const centralUsers = await sqlCentral`SELECT * FROM public.app_users WHERE email = ${email}`;
         const centralUser = centralUsers[0];
 
@@ -139,56 +147,36 @@ async function handleRequest(req) {
           return jsonResponse({ success: false, error: 'INVALID_CREDENTIALS', message: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' }, 401);
         }
 
-        const activeSchema = centralUser.schema_name || 'pos';
+        const activeSchema = centralUser.schema_name;
 
         try {
           await sqlCentral`UPDATE public.app_users SET last_login = now() WHERE id = ${centralUser.id}`;
-        } catch (updateError) {
-          console.warn('Warning: Could not update login timestamp', updateError.message);
-        }
+        } catch (e) { console.warn(e.message); }
         
         const token = generateToken(centralUser.id, centralUser.email, 'user', activeSchema);
 
         return jsonResponse({
           success: true,
-          data: {
-            user: { 
-              id: centralUser.id, 
-              email: centralUser.email, 
-              role: 'user', 
-              schema_name: activeSchema 
-            },
-            token
-          },
+          data: { user: { id: centralUser.id, email: centralUser.email, role: 'user', schema_name: activeSchema }, token },
           message: 'تم تسجيل الدخول بنجاح'
         });
       }
     }
 
-    // === [ GET Requests: Me ] ===
+    // === GET Me ===
     if (req.method === 'GET' && action === 'me') {
       const token = authHeader?.replace('Bearer ', '');
-      if (!token) {
-        return jsonResponse({ success: false, error: 'NO_TOKEN', message: 'لم يتم تقديم رمز المصادقة' }, 401);
-      }
+      if (!token) return jsonResponse({ success: false, error: 'NO_TOKEN', message: 'لم يتم تقديم رمز المصادقة' }, 401);
 
       const payload = verifyToken(token);
-      if (!payload) {
-        return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'رمز المصادقة غير صالح أو منتهي الصلاحية' }, 401);
-      }
+      if (!payload) return jsonResponse({ success: false, error: 'INVALID_TOKEN', message: 'الرمز غير صالح' }, 401);
 
       const centralUsers = await sqlCentral`SELECT id, email, schema_name FROM public.app_users WHERE id = ${payload.userId}`;
-      if (centralUsers.length === 0) {
-        return jsonResponse({ success: false, error: 'USER_NOT_FOUND', message: 'المستخدم غير موجود' }, 404);
-      }
+      if (centralUsers.length === 0) return jsonResponse({ success: false, error: 'USER_NOT_FOUND', message: 'المستخدم غير موجود' }, 404);
 
       return jsonResponse({ 
         success: true, 
-        data: { 
-          id: centralUsers[0].id, 
-          email: centralUsers[0].email, 
-          schema_name: centralUsers[0].schema_name || 'pos' 
-        } 
+        data: { id: centralUsers[0].id, email: centralUsers[0].email, schema_name: centralUsers[0].schema_name } 
       });
     }
 
@@ -200,9 +188,6 @@ async function handleRequest(req) {
   }
 }
 
-// === [ التصدير المتوافق مع معايير Vercel ] ===
 export async function GET(request) { return await handleRequest(request); }
 export async function POST(request) { return await handleRequest(request); }
-export async function OPTIONS() { 
-  return new Response(null, { status: 200, headers: corsHeaders }); 
-}
+export async function OPTIONS() { return new Response(null, { status: 200, headers: corsHeaders }); }
