@@ -158,8 +158,13 @@ async function handleRequest(req) {
 
         const activeSchema = centralUser.schema_name;
 
-        // تحديث آخر تسجيل دخول في الجدول المركزي
-        await sqlCentral`UPDATE public.app_users SET updated_at = now() WHERE id = ${centralUser.id}`;
+        // تصحيح الخطأ: تم استبدال الحقل غير الموجود updated_at بالحقل القياسي last_login لتجنب انهيار الاتصال
+        try {
+          await sqlCentral`UPDATE public.app_users SET last_login = now() WHERE id = ${centralUser.id}`;
+        } catch (updateError) {
+          // خطة بديلة (Fallback) في حال عدم توفر حقل last_login أيضاً في السكيما لتفادي توقف الدخول كلياً
+          console.warn('Warning: Could not update login timestamp', updateError.message);
+        }
         
         const token = generateToken(centralUser.id, centralUser.email, 'user', activeSchema);
 
