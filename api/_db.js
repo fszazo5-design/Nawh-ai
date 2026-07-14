@@ -3,11 +3,12 @@ import { neon } from '@neondatabase/serverless';
 /**
  * Database connection helper for Vercel Serverless Functions
  * Uses Neon serverless PostgreSQL with dynamic schema routing
+ * Default schema is set to 'pos' as requested
  */
 
 const dbConnections = {};
 
-export function getDb(schemaName = 'public') {
+export function getDb(schemaName = 'pos') {
   if (dbConnections[schemaName]) {
     return dbConnections[schemaName];
   }
@@ -18,6 +19,7 @@ export function getDb(schemaName = 'public') {
   }
 
   const url = new URL(connectionString);
+  // توجيه الاستعلامات تلقائياً إلى الـ Schema المحددة في قاعدة البيانات
   url.searchParams.set('options', `-c search_path=${schemaName}`);
 
   dbConnections[schemaName] = neon(url.toString());
@@ -25,414 +27,9 @@ export function getDb(schemaName = 'public') {
 }
 
 /**
- * Initialize database tables, functions, and triggers inside a specific schema
- */
-export async function initializeDatabase(schemaName = 'public') {
-  const sql = getDb(schemaName);
-
-  // 1. إنشاء السكيما
-  await sql(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
-
-  // 2. بناء الجداول الأساسية
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".users (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      email TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      full_name TEXT,
-      role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'manager', 'user')),
-      is_active BOOLEAN DEFAULT true,
-      last_login TIMESTAMPTZ,
-      created_at TIMESTAMPTZ DEFAULT now(),
-      updated_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await sql(`ALTER TABLE "${schemaName}".users DROP CONSTRAINT IF EXISTS users_email_key`);
-  await sql(`ALTER TABLE "${schemaName}".users ADD CONSTRAINT users_email_key UNIQUE (email)`);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".products (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL,
-      barcode TEXT,
-      category TEXT,
-      unit TEXT DEFAULT 'قطعة',
-      cost_price NUMERIC(12,2) DEFAULT 0,
-      sell_price NUMERIC(12,2) DEFAULT 0,
-      stock_qty NUMERIC(12,3) DEFAULT 0,
-      min_stock_qty NUMERIC(12,3) DEFAULT 5,
-      is_active BOOLEAN DEFAULT true,
-      image_url TEXT,
-      notes TEXT,
-      created_at TIMESTAMPTZ DEFAULT now(),
-      updated_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-  
-  await sql(`ALTER TABLE "${schemaName}".products DROP CONSTRAINT IF EXISTS products_barcode_key`);
-  await sql(`ALTER TABLE "${schemaName}".products ADD CONSTRAINT products_barcode_key UNIQUE (barcode)`);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".customers (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL,
-      phone TEXT,
-      email TEXT,
-      address TEXT,
-      tax_id TEXT,
-      credit_limit NUMERIC(12,2) DEFAULT 0,
-      current_balance NUMERIC(12,2) DEFAULT 0.00,
-      notes TEXT,
-      is_active BOOLEAN DEFAULT true,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".suppliers (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL,
-      phone TEXT,
-      email TEXT,
-      address TEXT,
-      tax_id TEXT,
-      credit_limit NUMERIC(12,2) DEFAULT 0,
-      current_balance NUMERIC(12,2) DEFAULT 0.00,
-      notes TEXT,
-      is_active BOOLEAN DEFAULT true,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  // جدول حركة المخزن المفقود (لتتبع المنتجات وحركتها التفصيلية في المستودع)
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".inventory_transactions (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      product_id UUID REFERENCES "${schemaName}".products(id) ON DELETE CASCADE,
-      type TEXT NOT NULL CHECK (type IN ('IN', 'OUT')), -- IN لشراء/توريد ، OUT لبيع/صرف
-      qty NUMERIC(12,3) NOT NULL,
-      source_type TEXT NOT NULL, -- 'invoice', 'purchase', 'manual'
-      reference_id UUID,
-      description TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".cash_flow (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      type TEXT NOT NULL CHECK (type IN ('IN', 'OUT')),
-      amount NUMERIC(12,2) NOT NULL,
-      source_type TEXT NOT NULL,
-      reference_id UUID,
-      description TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".expense_categories (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-  
-  await sql(`ALTER TABLE "${schemaName}".expense_categories DROP CONSTRAINT IF EXISTS expense_categories_name_key`);
-  await sql(`ALTER TABLE "${schemaName}".expense_categories ADD CONSTRAINT expense_categories_name_key UNIQUE (name)`);
-
-  // جدول فواتير المبيعات
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".invoices (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      invoice_number TEXT NOT NULL,
-      customer_id UUID REFERENCES "${schemaName}".customers(id) ON DELETE SET NULL,
-      status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'pending', 'cancelled')),
-      subtotal NUMERIC(12,2) DEFAULT 0,
-      discount_amt NUMERIC(12,2) DEFAULT 0,
-      tax_rate NUMERIC(5,2) DEFAULT 0,
-      tax_amt NUMERIC(12,2) DEFAULT 0,
-      total_amount NUMERIC(12,2) DEFAULT 0,
-      paid_amount NUMERIC(12,2) DEFAULT 0,
-      remaining_amount NUMERIC(12,2) GENERATED ALWAYS AS (total_amount - paid_amount) STORED,
-      payment_method TEXT DEFAULT 'cash' CHECK (payment_method IN ('cash', 'card', 'transfer', 'credit')),
-      notes TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-  
-  await sql(`ALTER TABLE "${schemaName}".invoices DROP CONSTRAINT IF EXISTS invoices_invoice_number_key`);
-  await sql(`ALTER TABLE "${schemaName}".invoices ADD CONSTRAINT invoices_invoice_number_key UNIQUE (invoice_number)`);
-
-  // تفاصيل فواتير المبيعات
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".invoice_items (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      invoice_id UUID NOT NULL REFERENCES "${schemaName}".invoices(id) ON DELETE CASCADE,
-      product_id UUID REFERENCES "${schemaName}".products(id) ON DELETE SET NULL,
-      name TEXT NOT NULL,
-      qty NUMERIC(12,3) NOT NULL,
-      unit_price NUMERIC(12,2) NOT NULL,
-      discount NUMERIC(5,2) DEFAULT 0,
-      total NUMERIC(12,2) NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  // جدول فواتير المشتريات
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".purchases (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      purchase_number TEXT NOT NULL,
-      supplier_id UUID REFERENCES "${schemaName}".suppliers(id) ON DELETE SET NULL,
-      status TEXT DEFAULT 'received' CHECK (status IN ('received', 'pending', 'cancelled')),
-      subtotal NUMERIC(12,2) DEFAULT 0,
-      discount_amt NUMERIC(12,2) DEFAULT 0,
-      tax_amt NUMERIC(12,2) DEFAULT 0,
-      total_amount NUMERIC(12,2) DEFAULT 0,
-      paid_amount NUMERIC(12,2) DEFAULT 0,
-      remaining_amount NUMERIC(12,2) GENERATED ALWAYS AS (total_amount - paid_amount) STORED,
-      payment_method TEXT DEFAULT 'cash' CHECK (payment_method IN ('cash', 'card', 'transfer', 'credit')),
-      notes TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-  
-  await sql(`ALTER TABLE "${schemaName}".purchases DROP CONSTRAINT IF EXISTS purchases_purchase_number_key`);
-  await sql(`ALTER TABLE "${schemaName}".purchases ADD CONSTRAINT purchases_purchase_number_key UNIQUE (purchase_number)`);
-
-  // تفاصيل فواتير المشتريات
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".purchase_items (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      purchase_id UUID NOT NULL REFERENCES "${schemaName}".purchases(id) ON DELETE CASCADE,
-      product_id UUID REFERENCES "${schemaName}".products(id) ON DELETE SET NULL,
-      name TEXT NOT NULL,
-      qty NUMERIC(12,3) NOT NULL,
-      unit_cost NUMERIC(12,2) NOT NULL,
-      total NUMERIC(12,2) NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".expenses (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      category_id UUID REFERENCES "${schemaName}".expense_categories(id) ON DELETE SET NULL,
-      description TEXT NOT NULL,
-      amount NUMERIC(12,2) NOT NULL,
-      paid_by TEXT,
-      receipt_url TEXT,
-      expense_date DATE,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".whatsapp_queue (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      recipient TEXT NOT NULL,
-      message TEXT NOT NULL,
-      template_name TEXT,
-      template_params JSONB,
-      status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
-      error_message TEXT,
-      sent_at TIMESTAMPTZ,
-      created_by UUID REFERENCES "${schemaName}".users(id) ON DELETE SET NULL,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".audit_log (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID REFERENCES "${schemaName}".users(id) ON DELETE SET NULL,
-      table_name TEXT NOT NULL,
-      record_id UUID,
-      action TEXT NOT NULL,
-      old_values JSONB,
-      new_values JSONB,
-      ip_address TEXT,
-      user_agent TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await sql(`
-    CREATE TABLE IF NOT EXISTS "${schemaName}".sync_queue (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID REFERENCES "${schemaName}".users(id) ON DELETE CASCADE,
-      table_name TEXT NOT NULL,
-      record_id UUID NOT NULL,
-      operation TEXT NOT NULL CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE')),
-      data JSONB,
-      synced BOOLEAN DEFAULT false,
-      synced_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  // إنشاء الفهارس
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_prod_bar_${schemaName}" ON "${schemaName}".products(barcode)`);
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_prod_cat_${schemaName}" ON "${schemaName}".products(category)`);
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_cust_${schemaName}" ON "${schemaName}".invoices(customer_id)`);
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_stat_${schemaName}" ON "${schemaName}".invoices(status)`);
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_created_${schemaName}" ON "${schemaName}".invoices(created_at DESC)`);
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_users_email_${schemaName}" ON "${schemaName}".users(email)`);
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_wa_status_${schemaName}" ON "${schemaName}".whatsapp_queue(status)`);
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_cash_flow_ref_${schemaName}" ON "${schemaName}".cash_flow(reference_id)`);
-  await sql(`CREATE INDEX IF NOT EXISTS "idx_inv_trx_ref_${schemaName}" ON "${schemaName}".inventory_transactions(reference_id)`);
-
-  // =========================================================================
-  // بناء محرك العمليات الحسابية والترابط الذكي اللحظي (PL/pgSQL Trigger Functions)
-  // =========================================================================
-
-  await sql(`CREATE EXTENSION IF NOT EXISTS plpgsql`);
-
-  // 1. تريجر معالجة المخازن لبنود المشتريات (تحديث مباشر وحركة تفصيلية للمخزن)
-  await sql(`
-    CREATE OR REPLACE FUNCTION "${schemaName}".fn_trg_inventory_purchase_items()
-    RETURNS TRIGGER AS $$
-    BEGIN
-      -- زيادة كمية المنتج وتحديث آخر سعر تكلفة
-      UPDATE "${schemaName}".products
-      SET 
-        stock_qty = stock_qty + NEW.qty,
-        cost_price = NEW.unit_cost,
-        updated_at = now()
-      WHERE id = NEW.product_id;
-
-      -- تسجيل الحركة في جدول المخزن المخصص للحركات
-      INSERT INTO "${schemaName}".inventory_transactions (product_id, type, qty, source_type, reference_id, description)
-      VALUES (NEW.product_id, 'IN', NEW.qty, 'purchase', NEW.purchase_id, 'إضافة كمية بموجب فاتورة شراء بند: ' || NEW.name);
-
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-  `);
-
-  await sql(`DROP TRIGGER IF EXISTS trg_inventory_purchase_item_insert ON "${schemaName}".purchase_items`);
-  await sql(`
-    CREATE TRIGGER trg_inventory_purchase_item_insert
-    AFTER INSERT ON "${schemaName}".purchase_items
-    FOR EACH ROW
-    EXECUTE FUNCTION "${schemaName}".fn_trg_inventory_purchase_items();
-  `);
-
-
-  // 2. تريجر معالجة رأس فاتورة المشتريات (الخزينة + الموردين) - يضمن عدم التكرار نهائياً
-  await sql(`
-    CREATE OR REPLACE FUNCTION "${schemaName}".fn_trg_financial_purchase_head()
-    RETURNS TRIGGER AS $$
-    BEGIN
-      -- حركة الخزينة (صادر) بالمبلغ المدفوع كاش فعلياً
-      IF NEW.paid_amount > 0 THEN
-        INSERT INTO "${schemaName}".cash_flow (type, amount, source_type, reference_id, description)
-        VALUES ('OUT', NEW.paid_amount, 'purchase', NEW.id, 'دفع نقدي لفاتورة شراء رقم: ' || NEW.purchase_number);
-      END IF;
-
-      -- ضبط مديونية حساب المورد بالمبلغ المتبقي (الآجل)
-      IF NEW.remaining_amount > 0 AND NEW.supplier_id IS NOT NULL THEN
-        UPDATE "${schemaName}".suppliers
-        SET current_balance = current_balance + NEW.remaining_amount
-        WHERE id = NEW.supplier_id;
-      END IF;
-
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-  `);
-
-  await sql(`DROP TRIGGER IF EXISTS trg_financial_purchase_head_insert ON "${schemaName}".purchases`);
-  await sql(`
-    CREATE TRIGGER trg_financial_purchase_head_insert
-    AFTER INSERT ON "${schemaName}".purchases
-    FOR EACH ROW
-    EXECUTE FUNCTION "${schemaName}".fn_trg_financial_purchase_head();
-  `);
-
-
-  // 3. تريجر معالجة المخازن لبنود المبيعات (خصم المنتج + تدوين الحركة في كارت الصنف للمخزن)
-  await sql(`
-    CREATE OR REPLACE FUNCTION "${schemaName}".fn_trg_inventory_sale_items()
-    RETURNS TRIGGER AS $$
-    BEGIN
-      -- خصم الكمية المباعة من المنتج مباشرة
-      UPDATE "${schemaName}".products
-      SET 
-        stock_qty = stock_qty - NEW.qty,
-        updated_at = now()
-      WHERE id = NEW.product_id;
-
-      -- تسجيل صادر من المخزن للحركة التفصيلية
-      INSERT INTO "${schemaName}".inventory_transactions (product_id, type, qty, source_type, reference_id, description)
-      VALUES (NEW.product_id, 'OUT', NEW.qty, 'invoice', NEW.invoice_id, 'صرف كمية بموجب فاتورة مبيعات بند: ' || NEW.name);
-
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-  `);
-
-  await sql(`DROP TRIGGER IF EXISTS trg_inventory_sale_item_insert ON "${schemaName}".invoice_items`);
-  await sql(`
-    CREATE TRIGGER trg_inventory_sale_item_insert
-    AFTER INSERT ON "${schemaName}".invoice_items
-    FOR EACH ROW
-    EXECUTE FUNCTION "${schemaName}".fn_trg_inventory_sale_items();
-  `);
-
-
-  // 4. تريجر معالجة رأس فاتورة المبيعات المالية (الخزينة + ديون العملاء)
-  await sql(`
-    CREATE OR REPLACE FUNCTION "${schemaName}".fn_trg_financial_sale_head()
-    RETURNS TRIGGER AS $$
-    BEGIN
-      -- حركة الخزينة (وارد) بالمبلغ المقبوض
-      IF NEW.paid_amount > 0 THEN
-        INSERT INTO "${schemaName}".cash_flow (type, amount, source_type, reference_id, description)
-        VALUES ('IN', NEW.paid_amount, 'invoice', NEW.id, 'تحصيل نقدي لفاتورة مبيعات رقم: ' || NEW.invoice_number);
-      END IF;
-
-      -- زيادة ديون العميل إذا تضمنت الفاتورة مبلغ متبقي آجل
-      IF NEW.remaining_amount > 0 AND NEW.customer_id IS NOT NULL THEN
-        UPDATE "${schemaName}".customers
-        SET current_balance = current_balance + NEW.remaining_amount
-        WHERE id = NEW.customer_id;
-      END IF;
-
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-  `);
-
-  await sql(`DROP TRIGGER IF EXISTS trg_financial_sale_head_insert ON "${schemaName}".invoices`);
-  await sql(`
-    CREATE TRIGGER trg_financial_sale_head_insert
-    AFTER INSERT ON "${schemaName}".invoices
-    FOR EACH ROW
-    EXECUTE FUNCTION "${schemaName}".fn_trg_financial_sale_head();
-  `);
-
-  // د. إدخال تصنيفات المصاريف الافتراضية
-  await sql(`
-    INSERT INTO "${schemaName}".expense_categories (name)
-    VALUES
-      ('رواتب'), ('إيجار'), ('مرافق'), ('مواصلات'), ('صيانة'), ('مشتريات مكتبية'), ('تسويق'), ('أخرى')
-    ON CONFLICT (name) DO NOTHING
-  `);
-
-  return { success: true, message: `Database schema '${schemaName}' initialized with Complete Stock & Financial Autopilot Triggers.` };
-}
-
-// ========================================================
-// واجهة الـ API للتعامل الآمن مع العمليات عبر Node.js
-// ========================================================
-
-/**
  * 1. إضافة منتج جديد
  */
-export async function createProduct(schemaName, productData) {
+export async function createProduct(schemaName = 'pos', productData) {
   const sql = getDb(schemaName);
   const { name, barcode, category, unit, sell_price, cost_price, min_stock_qty, notes, image_url } = productData;
 
@@ -458,16 +55,20 @@ export async function createProduct(schemaName, productData) {
 }
 
 /**
- * 2. إضافة فاتورة شراء
+ * 2. إضافة ومعالجة فاتورة شراء (مع بنودها)
+ * التريجرات المبرمجة في قاعدة البيانات ستتكفل تلقائياً بزيادة المخازن
+ * وضبط حساب الموردين والتدفق المالي للخزينة.
  */
-export async function processPurchaseInvoice(schemaName, purchaseData, items) {
+export async function processPurchaseInvoice(schemaName = 'pos', purchaseData, items) {
   const sql = getDb(schemaName);
   
   try {
+    // بدء المعاملة لضمان تنفيذ العملية بالكامل أو إلغائها لمنع تضارب البيانات
     await sql('BEGIN');
 
     const { purchase_number, supplier_id, status, subtotal, discount_amt, tax_amt, total_amount, paid_amount, payment_method, notes } = purchaseData;
 
+    // 1. حفظ رأس الفاتورة
     const purchaseResult = await sql(`
       INSERT INTO "${schemaName}".purchases 
         (purchase_number, supplier_id, status, subtotal, discount_amt, tax_amt, total_amount, paid_amount, payment_method, notes)
@@ -478,6 +79,7 @@ export async function processPurchaseInvoice(schemaName, purchaseData, items) {
 
     const invoice = purchaseResult[0];
 
+    // 2. حفظ البنود التفصيلية (التريجرات ستعمل على كل سطر يتم إدخاله هنا تلقائياً)
     for (const item of items) {
       await sql(`
         INSERT INTO "${schemaName}".purchase_items 
@@ -496,9 +98,11 @@ export async function processPurchaseInvoice(schemaName, purchaseData, items) {
 }
 
 /**
- * 3. إضافة فاتورة بيع
+ * 3. إضافة ومعالجة فاتورة بيع (مع بنودها)
+ * التريجرات المبرمجة في قاعدة البيانات ستتكفل تلقائياً بخصم كميات المخزون،
+ * تدوين حركة كارت الصنف، زيادة مديونية العميل بالآجل، وتسجيل وارد الخزينة.
  */
-export async function processSaleInvoice(schemaName, saleData, items) {
+export async function processSaleInvoice(schemaName = 'pos', saleData, items) {
   const sql = getDb(schemaName);
 
   try {
@@ -506,6 +110,7 @@ export async function processSaleInvoice(schemaName, saleData, items) {
 
     const { invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes } = saleData;
 
+    // 1. حفظ رأس فاتورة المبيعات
     const invoiceResult = await sql(`
       INSERT INTO "${schemaName}".invoices 
         (invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
@@ -516,6 +121,7 @@ export async function processSaleInvoice(schemaName, saleData, items) {
 
     const invoice = invoiceResult[0];
 
+    // 2. حفظ البنود وتفعيل تريجر الخصم التلقائي للمخزون وحركة الصنف لكل منتج
     for (const item of items) {
       await sql(`
         INSERT INTO "${schemaName}".invoice_items 
@@ -534,9 +140,9 @@ export async function processSaleInvoice(schemaName, saleData, items) {
 }
 
 /**
- * 4. استعلام التقارير المجمع الذكي والمثالي لسرعة الأداء
+ * 4. استعلام التقارير المجمع والذكي للـ Dashboard
  */
-export async function getUnifiedDashboardReport(schemaName) {
+export async function getUnifiedDashboardReport(schemaName = 'pos') {
   const sql = getDb(schemaName);
 
   const reportResult = await sql(`
@@ -564,7 +170,6 @@ export async function getUnifiedDashboardReport(schemaName) {
 
 export default { 
   getDb, 
-  initializeDatabase, 
   createProduct, 
   processPurchaseInvoice, 
   processSaleInvoice, 
