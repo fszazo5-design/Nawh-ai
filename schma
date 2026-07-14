@@ -1,0 +1,506 @@
+-- ==========================================
+-- 1. إعداد السكيما وتفعيل الإضافات المطلوبة
+-- ==========================================
+CREATE SCHEMA IF NOT EXISTS "pos";
+
+-- تفعيل ميزة توليد معرفات الـ UUID عشوائياً في الـ Schema الحالية
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "plpgsql";
+
+-- ==========================================
+-- 2. بناء الجداول الأساسية داخل سكيما pos
+-- ==========================================
+
+-- جدول المستخدمين
+CREATE TABLE IF NOT EXISTS "pos".users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    full_name TEXT,
+    role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'manager', 'user')),
+    is_active BOOLEAN DEFAULT true,
+    last_login TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE "pos".users DROP CONSTRAINT IF EXISTS users_email_key;
+ALTER TABLE "pos".users ADD CONSTRAINT users_email_key UNIQUE (email);
+
+-- جدول المنتجات
+CREATE TABLE IF NOT EXISTS "pos".products (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    barcode TEXT,
+    category TEXT,
+    unit TEXT DEFAULT 'قطعة',
+    cost_price NUMERIC(12,2) DEFAULT 0,
+    sell_price NUMERIC(12,2) DEFAULT 0,
+    stock_qty NUMERIC(12,3) DEFAULT 0,
+    min_stock_qty NUMERIC(12,3) DEFAULT 5,
+    is_active BOOLEAN DEFAULT true,
+    image_url TEXT,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE "pos".products DROP CONSTRAINT IF EXISTS products_barcode_key;
+ALTER TABLE "pos".products ADD CONSTRAINT products_barcode_key UNIQUE (barcode);
+
+-- جدول العملاء
+CREATE TABLE IF NOT EXISTS "pos".customers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    address TEXT,
+    tax_id TEXT,
+    credit_limit NUMERIC(12,2) DEFAULT 0,
+    current_balance NUMERIC(12,2) DEFAULT 0.00,
+    notes TEXT,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول الموردين
+CREATE TABLE IF NOT EXISTS "pos".suppliers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    address TEXT,
+    tax_id TEXT,
+    credit_limit NUMERIC(12,2) DEFAULT 0,
+    current_balance NUMERIC(12,2) DEFAULT 0.00,
+    notes TEXT,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول حركات المخازن التفصيلي (كارت الصنف)
+CREATE TABLE IF NOT EXISTS "pos".inventory_transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id UUID REFERENCES "pos".products(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('IN', 'OUT')),
+    qty NUMERIC(12,3) NOT NULL,
+    source_type TEXT NOT NULL, -- 'invoice', 'purchase', 'manual'
+    reference_id UUID,
+    description TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول حركة الخزينة والتدفقات النقدية
+CREATE TABLE IF NOT EXISTS "pos".cash_flow (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    type TEXT NOT NULL CHECK (type IN ('IN', 'OUT')),
+    amount NUMERIC(12,2) NOT NULL,
+    source_type TEXT NOT NULL,
+    reference_id UUID,
+    description TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول تصنيفات المصاريف
+CREATE TABLE IF NOT EXISTS "pos".expense_categories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE "pos".expense_categories DROP CONSTRAINT IF EXISTS expense_categories_name_key;
+ALTER TABLE "pos".expense_categories ADD CONSTRAINT expense_categories_name_key UNIQUE (name);
+
+-- جدول فواتير المبيعات
+CREATE TABLE IF NOT EXISTS "pos".invoices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_number TEXT NOT NULL,
+    customer_id UUID REFERENCES "pos".customers(id) ON DELETE SET NULL,
+    status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'pending', 'cancelled')),
+    subtotal NUMERIC(12,2) DEFAULT 0,
+    discount_amt NUMERIC(12,2) DEFAULT 0,
+    tax_rate NUMERIC(5,2) DEFAULT 0,
+    tax_amt NUMERIC(12,2) DEFAULT 0,
+    total_amount NUMERIC(12,2) DEFAULT 0,
+    paid_amount NUMERIC(12,2) DEFAULT 0,
+    remaining_amount NUMERIC(12,2) GENERATED ALWAYS AS (total_amount - paid_amount) STORED,
+    payment_method TEXT DEFAULT 'cash' CHECK (payment_method IN ('cash', 'card', 'transfer', 'credit')),
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE "pos".invoices DROP CONSTRAINT IF EXISTS invoices_invoice_number_key;
+ALTER TABLE "pos".invoices ADD CONSTRAINT invoices_invoice_number_key UNIQUE (invoice_number);
+
+-- جدول تفاصيل بنود فواتير المبيعات
+CREATE TABLE IF NOT EXISTS "pos".invoice_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_id UUID NOT NULL REFERENCES "pos".invoices(id) ON DELETE CASCADE,
+    product_id UUID REFERENCES "pos".products(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    qty NUMERIC(12,3) NOT NULL,
+    unit_price NUMERIC(12,2) NOT NULL,
+    discount NUMERIC(5,2) DEFAULT 0,
+    total NUMERIC(12,2) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول فواتير المشتريات
+CREATE TABLE IF NOT EXISTS "pos".purchases (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    purchase_number TEXT NOT NULL,
+    supplier_id UUID REFERENCES "pos".suppliers(id) ON DELETE SET NULL,
+    status TEXT DEFAULT 'received' CHECK (status IN ('received', 'pending', 'cancelled')),
+    subtotal NUMERIC(12,2) DEFAULT 0,
+    discount_amt NUMERIC(12,2) DEFAULT 0,
+    tax_amt NUMERIC(12,2) DEFAULT 0,
+    total_amount NUMERIC(12,2) DEFAULT 0,
+    paid_amount NUMERIC(12,2) DEFAULT 0,
+    remaining_amount NUMERIC(12,2) GENERATED ALWAYS AS (total_amount - paid_amount) STORED,
+    payment_method TEXT DEFAULT 'cash' CHECK (payment_method IN ('cash', 'card', 'transfer', 'credit')),
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE "pos".purchases DROP CONSTRAINT IF EXISTS purchases_purchase_number_key;
+ALTER TABLE "pos".purchases ADD CONSTRAINT purchases_purchase_number_key UNIQUE (purchase_number);
+
+-- جدول تفاصيل بنود فواتير المشتريات
+CREATE TABLE IF NOT EXISTS "pos".purchase_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    purchase_id UUID NOT NULL REFERENCES "pos".purchases(id) ON DELETE CASCADE,
+    product_id UUID REFERENCES "pos".products(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    qty NUMERIC(12,3) NOT NULL,
+    unit_cost NUMERIC(12,2) NOT NULL,
+    total NUMERIC(12,2) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول المصاريف
+CREATE TABLE IF NOT EXISTS "pos".expenses (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    category_id UUID REFERENCES "pos".expense_categories(id) ON DELETE SET NULL,
+    description TEXT NOT NULL,
+    amount NUMERIC(12,2) NOT NULL,
+    paid_by TEXT,
+    receipt_url TEXT,
+    expense_date DATE,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول طابور رسائل الواتساب
+CREATE TABLE IF NOT EXISTS "pos".whatsapp_queue (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    recipient TEXT NOT NULL,
+    message TEXT NOT NULL,
+    template_name TEXT,
+    template_params JSONB,
+    status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    error_message TEXT,
+    sent_at TIMESTAMPTZ,
+    created_by UUID REFERENCES "pos".users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول سجل المراجعة والتتبع والأمان
+CREATE TABLE IF NOT EXISTS "pos".audit_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES "pos".users(id) ON DELETE SET NULL,
+    table_name TEXT NOT NULL,
+    record_id UUID,
+    action TEXT NOT NULL,
+    old_values JSONB,
+    new_values JSONB,
+    ip_address TEXT,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- جدول طابور المزامنة
+CREATE TABLE IF NOT EXISTS "pos".sync_queue (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES "pos".users(id) ON DELETE CASCADE,
+    table_name TEXT NOT NULL,
+    record_id UUID NOT NULL,
+    operation TEXT NOT NULL CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE')),
+    data JSONB,
+    synced BOOLEAN DEFAULT false,
+    synced_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+
+-- ==========================================
+-- 3. بناء الفهارس (Indexes) لسرعة الأداء داخل pos
+-- ==========================================
+CREATE INDEX IF NOT EXISTS "idx_prod_bar_pos" ON "pos".products(barcode);
+CREATE INDEX IF NOT EXISTS "idx_prod_cat_pos" ON "pos".products(category);
+CREATE INDEX IF NOT EXISTS "idx_inv_cust_pos" ON "pos".invoices(customer_id);
+CREATE INDEX IF NOT EXISTS "idx_inv_stat_pos" ON "pos".invoices(status);
+CREATE INDEX IF NOT EXISTS "idx_inv_created_pos" ON "pos".invoices(created_at DESC);
+CREATE INDEX IF NOT EXISTS "idx_users_email_pos" ON "pos".users(email);
+CREATE INDEX IF NOT EXISTS "idx_wa_status_pos" ON "pos".whatsapp_queue(status);
+CREATE INDEX IF NOT EXISTS "idx_cash_flow_ref_pos" ON "pos".cash_flow(reference_id);
+CREATE INDEX IF NOT EXISTS "idx_inv_trx_ref_pos" ON "pos".inventory_transactions(reference_id);
+
+
+-- ==========================================
+-- 4. الدوال والتريجرات الذكية للمخازن والمالية والحسابات (النسخة الاحترافية الشاملة)
+-- ==========================================
+
+-- [أولاً] تريجر ذكي لمعالجة بنود المشتريات (شراء، تعديل كمية، أو حذف بند بالكامل)
+CREATE OR REPLACE FUNCTION "pos".fn_trg_inventory_purchase_items()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_diff_qty NUMERIC(12,3);
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        -- زيادة المخزون مباشرة عند الشراء وتحديث التكلفة
+        UPDATE "pos".products
+        SET stock_qty = stock_qty + NEW.qty,
+            cost_price = NEW.unit_cost,
+            updated_at = now()
+        WHERE id = NEW.product_id;
+
+        -- تسجيل الحركة كوارد مخزني
+        INSERT INTO "pos".inventory_transactions (product_id, type, qty, source_type, reference_id, description)
+        VALUES (NEW.product_id, 'IN', NEW.qty, 'purchase', NEW.purchase_id, 'إضافة كمية بموجب فاتورة شراء بند: ' || NEW.name);
+
+    ELSIF (TG_OP = 'UPDATE') THEN
+        -- حساب فرق الكمية لتعديل المخزن
+        v_diff_qty := NEW.qty - OLD.qty;
+        
+        UPDATE "pos".products
+        SET stock_qty = stock_qty + v_diff_qty,
+            cost_price = NEW.unit_cost,
+            updated_at = now()
+        WHERE id = NEW.product_id;
+
+        -- تسجيل تعديل الحركة
+        INSERT INTO "pos".inventory_transactions (product_id, type, qty, source_type, reference_id, description)
+        VALUES (NEW.product_id, CASE WHEN v_diff_qty >= 0 THEN 'IN' ELSE 'OUT' END, ABS(v_diff_qty), 'purchase', NEW.purchase_id, 'تعديل كمية البند في المشتريات إلى: ' || NEW.qty);
+
+    ELSIF (TG_OP = 'DELETE') THEN
+        -- خصم الكمية المحذوفة من المخزن فوراً لإعادة ضبط الرصيد الفعلي
+        UPDATE "pos".products
+        SET stock_qty = stock_qty - OLD.qty,
+            updated_at = now()
+        WHERE id = OLD.product_id;
+
+        -- تسجيل الحركة العكسية
+        INSERT INTO "pos".inventory_transactions (product_id, type, qty, source_type, reference_id, description)
+        VALUES (OLD.product_id, 'OUT', OLD.qty, 'purchase', OLD.purchase_id, 'حذف بند من فاتورة المشتريات: ' || OLD.name);
+    END IF;
+    
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_inventory_purchase_item_all ON "pos".purchase_items;
+CREATE TRIGGER trg_inventory_purchase_item_all
+AFTER INSERT OR UPDATE OR DELETE ON "pos".purchase_items
+FOR EACH ROW
+EXECUTE FUNCTION "pos".fn_trg_inventory_purchase_items();
+
+
+-- [ثانياً] تريجر ذكي لمعالجة بنود المبيعات (بيع، تعديل كمية مرتجع، أو حذف بند)
+CREATE OR REPLACE FUNCTION "pos".fn_trg_inventory_sale_items()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_diff_qty NUMERIC(12,3);
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        -- خصم من المخزون مباشرة عند البيع
+        UPDATE "pos".products
+        SET stock_qty = stock_qty - NEW.qty,
+            updated_at = now()
+        WHERE id = NEW.product_id;
+
+        -- تسجيل حركة صادر
+        INSERT INTO "pos".inventory_transactions (product_id, type, qty, source_type, reference_id, description)
+        VALUES (NEW.product_id, 'OUT', NEW.qty, 'invoice', NEW.invoice_id, 'صرف كمية بموجب فاتورة مبيعات بند: ' || NEW.name);
+
+    ELSIF (TG_OP = 'UPDATE') THEN
+        -- حساب فرق التعديل للكميات المباعة
+        v_diff_qty := NEW.qty - OLD.qty;
+        
+        UPDATE "pos".products
+        SET stock_qty = stock_qty - v_diff_qty,
+            updated_at = now()
+        WHERE id = NEW.product_id;
+
+        -- توثيق تعديل الكمية مخزنياً
+        INSERT INTO "pos".inventory_transactions (product_id, type, qty, source_type, reference_id, description)
+        VALUES (NEW.product_id, CASE WHEN v_diff_qty >= 0 THEN 'OUT' ELSE 'IN' END, ABS(v_diff_qty), 'invoice', NEW.invoice_id, 'تعديل كمية البند المباعة إلى: ' || NEW.qty);
+
+    ELSIF (TG_OP = 'DELETE') THEN
+        -- إرجاع الكمية بالكامل إلى المخزون عند مسح البند من الفاتورة
+        UPDATE "pos".products
+        SET stock_qty = stock_qty + OLD.qty,
+            updated_at = now()
+        WHERE id = OLD.product_id;
+
+        -- تسجيل إعادة السلعة للمخزن
+        INSERT INTO "pos".inventory_transactions (product_id, type, qty, source_type, reference_id, description)
+        VALUES (OLD.product_id, 'IN', OLD.qty, 'invoice', OLD.invoice_id, 'حذف بند من فاتورة المبيعات وإعادة الكمية للمخزن: ' || OLD.name);
+    END IF;
+    
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_inventory_sale_item_all ON "pos".invoice_items;
+CREATE TRIGGER trg_inventory_sale_item_all
+AFTER INSERT OR UPDATE OR DELETE ON "pos".invoice_items
+FOR EACH ROW
+EXECUTE FUNCTION "pos".fn_trg_inventory_sale_items();
+
+
+-- [ثالثاً] تريجر معالجة التغيرات المالية في فواتير المبيعات (تعديل الحسابات، الدفع الآجل والتحصيل)
+CREATE OR REPLACE FUNCTION "pos".fn_trg_financial_sale_head()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_diff_paid NUMERIC(12,2) := 0;
+    v_diff_remain NUMERIC(12,2) := 0;
+BEGIN
+    -- في حالة الإضافة الجديدة لبيانات الفاتورة
+    IF (TG_OP = 'INSERT') THEN
+        IF NEW.paid_amount > 0 THEN
+            INSERT INTO "pos".cash_flow (type, amount, source_type, reference_id, description)
+            VALUES ('IN', NEW.paid_amount, 'invoice', NEW.id, 'تحصيل نقدي لفاتورة مبيعات رقم: ' || NEW.invoice_number);
+        END IF;
+
+        IF NEW.remaining_amount > 0 AND NEW.customer_id IS NOT NULL THEN
+            UPDATE "pos".customers
+            SET current_balance = current_balance + NEW.remaining_amount
+            WHERE id = NEW.customer_id;
+        END IF;
+
+    -- في حالة تعديل طرق الدفع أو المبالغ المسددة
+    ELSIF (TG_OP = 'UPDATE') THEN
+        -- تسوية الفروقات النقدية في الخزينة
+        v_diff_paid := NEW.paid_amount - OLD.paid_amount;
+        IF v_diff_paid <> 0 THEN
+            INSERT INTO "pos".cash_flow (type, amount, source_type, reference_id, description)
+            VALUES (
+                CASE WHEN v_diff_paid > 0 THEN 'IN' ELSE 'OUT' END,
+                ABS(v_diff_paid),
+                'invoice',
+                NEW.id,
+                'تعديل المبلغ المحصل لفاتورة رقم: ' || NEW.invoice_number
+            );
+        END IF;
+
+        -- تسوية الفروقات الآجلة في حسابات العملاء
+        v_diff_remain := NEW.remaining_amount - OLD.remaining_amount;
+        IF v_diff_remain <> 0 AND NEW.customer_id IS NOT NULL THEN
+            UPDATE "pos".customers
+            SET current_balance = current_balance + v_diff_remain
+            WHERE id = NEW.customer_id;
+        END IF;
+
+    -- في حالة حذف الفاتورة بالكامل
+    ELSIF (TG_OP = 'DELETE') THEN
+        -- استرجاع المال المدفوع من الخزنة
+        IF OLD.paid_amount > 0 THEN
+            INSERT INTO "pos".cash_flow (type, amount, source_type, reference_id, description)
+            VALUES ('OUT', OLD.paid_amount, 'invoice', OLD.id, 'إلغاء واسترداد دفع الفاتورة المحذوفة رقم: ' || OLD.invoice_number);
+        END IF;
+
+        -- خصم المبالغ الآجلة التي سجلت على العميل سابقاً
+        IF OLD.remaining_amount > 0 AND OLD.customer_id IS NOT NULL THEN
+            UPDATE "pos".customers
+            SET current_balance = current_balance - OLD.remaining_amount
+            WHERE id = OLD.customer_id;
+        END IF;
+    END IF;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_financial_sale_head_all ON "pos".invoices;
+CREATE TRIGGER trg_financial_sale_head_all
+AFTER INSERT OR UPDATE OR DELETE ON "pos".invoices
+FOR EACH ROW
+EXECUTE FUNCTION "pos".fn_trg_financial_sale_head();
+
+
+-- [رابعاً] تريجر معالجة التغيرات المالية لفواتير المشتريات (تحديث حسابات الخزينة والموردين)
+CREATE OR REPLACE FUNCTION "pos".fn_trg_financial_purchase_head()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_diff_paid NUMERIC(12,2) := 0;
+    v_diff_remain NUMERIC(12,2) := 0;
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        IF NEW.paid_amount > 0 THEN
+            INSERT INTO "pos".cash_flow (type, amount, source_type, reference_id, description)
+            VALUES ('OUT', NEW.paid_amount, 'purchase', NEW.id, 'دفع نقدي لفاتورة شراء رقم: ' || NEW.purchase_number);
+        END IF;
+
+        IF NEW.remaining_amount > 0 AND NEW.supplier_id IS NOT NULL THEN
+            UPDATE "pos".suppliers
+            SET current_balance = current_balance + NEW.remaining_amount
+            WHERE id = NEW.supplier_id;
+        END IF;
+
+    ELSIF (TG_OP = 'UPDATE') THEN
+        v_diff_paid := NEW.paid_amount - OLD.paid_amount;
+        IF v_diff_paid <> 0 THEN
+            INSERT INTO "pos".cash_flow (type, amount, source_type, reference_id, description)
+            VALUES (
+                CASE WHEN v_diff_paid > 0 THEN 'OUT' ELSE 'IN' END,
+                ABS(v_diff_paid),
+                'purchase',
+                NEW.id,
+                'تعديل المبلغ المدفوع لفاتورة شراء رقم: ' || NEW.purchase_number
+            );
+        END IF;
+
+        v_diff_remain := NEW.remaining_amount - OLD.remaining_amount;
+        IF v_diff_remain <> 0 AND NEW.supplier_id IS NOT NULL THEN
+            UPDATE "pos".suppliers
+            SET current_balance = current_balance + v_diff_remain
+            WHERE id = NEW.supplier_id;
+        END IF;
+
+    ELSIF (TG_OP = 'DELETE') THEN
+        IF OLD.paid_amount > 0 THEN
+            INSERT INTO "pos".cash_flow (type, amount, source_type, reference_id, description)
+            VALUES ('IN', OLD.paid_amount, 'purchase', OLD.id, 'إلغاء واسترداد مالي لمشتريات محذوفة رقم: ' || OLD.purchase_number);
+        END IF;
+
+        IF OLD.remaining_amount > 0 AND OLD.supplier_id IS NOT NULL THEN
+            UPDATE "pos".suppliers
+            SET current_balance = current_balance - OLD.remaining_amount
+            WHERE id = OLD.supplier_id;
+        END IF;
+    END IF;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_financial_purchase_head_all ON "pos".purchases;
+CREATE TRIGGER trg_financial_purchase_head_all
+AFTER INSERT OR UPDATE OR DELETE ON "pos".purchases
+FOR EACH ROW
+EXECUTE FUNCTION "pos".fn_trg_financial_purchase_head();
+
+
+-- ==========================================
+-- 5. تهيئة البيانات الأساسية والافتراضية
+-- ==========================================
+INSERT INTO "pos".expense_categories (name)
+VALUES
+  ('رواتب'), 
+  ('إيجار'), 
+  ('مرافق'), 
+  ('مواصلات'), 
+  ('صيانة'), 
+  ('مشتريات مكتبية'), 
+  ('تسويق'), 
+  ('أخرى')
+ON CONFLICT (name) DO NOTHING;
