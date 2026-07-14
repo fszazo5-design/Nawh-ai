@@ -8,9 +8,14 @@ import { neon } from '@neondatabase/serverless';
 
 const dbConnections = {};
 
+/**
+ * جلب اتصال قاعدة البيانات مع توجيه السكيما ديناميكياً
+ */
 export function getDb(schemaName = 'pos') {
-  if (dbConnections[schemaName]) {
-    return dbConnections[schemaName];
+  const safeSchema = schemaName.replace(/[^a-zA-Z0-9_]/g, '');
+  
+  if (dbConnections[safeSchema]) {
+    return dbConnections[safeSchema];
   }
 
   let connectionString = process.env.DATABASE_URL;
@@ -20,10 +25,18 @@ export function getDb(schemaName = 'pos') {
 
   const url = new URL(connectionString);
   // توجيه الاستعلامات تلقائياً إلى الـ Schema المحددة في قاعدة البيانات
-  url.searchParams.set('options', `-c search_path=${schemaName}`);
+  url.searchParams.set('options', `-c search_path=${safeSchema}`);
 
-  dbConnections[schemaName] = neon(url.toString());
-  return dbConnections[schemaName];
+  dbConnections[safeSchema] = neon(url.toString());
+  return dbConnections[safeSchema];
+}
+
+/**
+ * دالة فارغة مضافة لمنع حدوث خطأ الاستيراد في ملف الـ API القديم أو الجديد
+ * حيث يتكفل النظام التلقائي بإنشاء السكيما والجداول عند تسجيل حساب العميل
+ */
+export async function initializeDatabase(schemaName = 'pos') {
+  return { success: true, message: `Schema ${schemaName} is managed at registration.` };
 }
 
 /**
@@ -56,14 +69,11 @@ export async function createProduct(schemaName = 'pos', productData) {
 
 /**
  * 2. إضافة ومعالجة فاتورة شراء (مع بنودها)
- * التريجرات المبرمجة في قاعدة البيانات ستتكفل تلقائياً بزيادة المخازن
- * وضبط حساب الموردين والتدفق المالي للخزينة.
  */
 export async function processPurchaseInvoice(schemaName = 'pos', purchaseData, items) {
   const sql = getDb(schemaName);
   
   try {
-    // بدء المعاملة لضمان تنفيذ العملية بالكامل أو إلغائها لمنع تضارب البيانات
     await sql('BEGIN');
 
     const { purchase_number, supplier_id, status, subtotal, discount_amt, tax_amt, total_amount, paid_amount, payment_method, notes } = purchaseData;
@@ -79,7 +89,7 @@ export async function processPurchaseInvoice(schemaName = 'pos', purchaseData, i
 
     const invoice = purchaseResult[0];
 
-    // 2. حفظ البنود التفصيلية (التريجرات ستعمل على كل سطر يتم إدخاله هنا تلقائياً)
+    // 2. حفظ البنود التفصيلية
     for (const item of items) {
       await sql(`
         INSERT INTO "${schemaName}".purchase_items 
@@ -99,8 +109,6 @@ export async function processPurchaseInvoice(schemaName = 'pos', purchaseData, i
 
 /**
  * 3. إضافة ومعالجة فاتورة بيع (مع بنودها)
- * التريجرات المبرمجة في قاعدة البيانات ستتكفل تلقائياً بخصم كميات المخزون،
- * تدوين حركة كارت الصنف، زيادة مديونية العميل بالآجل، وتسجيل وارد الخزينة.
  */
 export async function processSaleInvoice(schemaName = 'pos', saleData, items) {
   const sql = getDb(schemaName);
@@ -121,7 +129,7 @@ export async function processSaleInvoice(schemaName = 'pos', saleData, items) {
 
     const invoice = invoiceResult[0];
 
-    // 2. حفظ البنود وتفعيل تريجر الخصم التلقائي للمخزون وحركة الصنف لكل منتج
+    // 2. حفظ البنود
     for (const item of items) {
       await sql(`
         INSERT INTO "${schemaName}".invoice_items 
@@ -140,7 +148,7 @@ export async function processSaleInvoice(schemaName = 'pos', saleData, items) {
 }
 
 /**
- * 4. استعلام التقارير المجمع والذكي للـ Dashboard
+ * 4. استعلام التقارير المجمع للـ Dashboard
  */
 export async function getUnifiedDashboardReport(schemaName = 'pos') {
   const sql = getDb(schemaName);
@@ -168,8 +176,10 @@ export async function getUnifiedDashboardReport(schemaName = 'pos') {
   return reportResult[0];
 }
 
+// التصدير الافتراضي المتكامل ليتناسب مع كافة أنواع الاستدعاءات
 export default { 
   getDb, 
+  initializeDatabase,
   createProduct, 
   processPurchaseInvoice, 
   processSaleInvoice, 
