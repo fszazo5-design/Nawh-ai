@@ -11,14 +11,15 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// دالة لتنظيف وتحويل الاسم لاسم سكيما مستقل وصالح لـ Postgres
+// دالة لتنظيف وتحويل الاسم لاسم سكيما مستقل وصالح وآمن تماماً لـ Postgres
 function generateSchemaName(fullName) {
   if (!fullName) return 'tenant_' + crypto.randomUUID().split('-')[0];
   
   let safeName = fullName
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9_]/g, '_') // لضمان التوافق التام مع أسماء السكيما يفضل الحروف الإنجليزية والأرقام
+    // استبعاد أي رموز غريبة أو حركات خبيثة لضمان أمان النص تماماً ضد SQL Injection
+    .replace(/[^a-z0-9_]/g, '_') 
     .replace(/^[^a-z_]/, '_');   
     
   return safeName || 'tenant_' + crypto.randomUUID().split('-')[0];
@@ -92,7 +93,7 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // 2. توليد اسم السكيما الخاص بالحساب
+        // 2. توليد اسم السكيما المُنظّف
         const schemaName = generateSchemaName(full_name || email.split('@')[0]);
 
         // 3. إنشاء السجل في الجدول المركزي
@@ -101,27 +102,27 @@ async function handleRequest(req) {
           VALUES (${userId}, ${email}, ${passwordHash}, ${schemaName})
         `;
 
-        // 4. السحر هنا: إنشاء سكيما جديدة واستنساخ الجداول والتريجرات من السكيما "pos" الجاهزة فوراً بـ 3 أسطر فقط وبسرعة خارقة!
-        await sqlCentral`CREATE SCHEMA "${sqlCentral(schemaName)}"`;
+        // 4. الحل الفعّال والآمن: تمرير اسم السكيما المُطهر كنص مباشر غير مُعامل (Unparameterized) لمنع الخطأ
+        await sqlCentral.unsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
         
-        // أمر Postgres السريع لنسخ هيكل الجداول من السكيما النموذجية pos إلى السكيما الجديدة
-        await sqlCentral`
+        // استنساخ الجداول من سكيما pos النموذجية إلى سكيما العميل الجديدة بشكل ديناميكي آمن
+        await sqlCentral.unsafe(`
           DO $$ 
           DECLARE 
             r RECORD; 
           BEGIN 
             FOR r IN (SELECT table_name FROM information_schema.tables WHERE table_schema = 'pos') LOOP 
-              EXECUTE 'CREATE TABLE "' || ${schemaName} || '"."' || r.table_name || '" (LIKE "pos"."' || r.table_name || '" INCLUDING ALL)'; 
+              EXECUTE 'CREATE TABLE IF NOT EXISTS "' || '${schemaName}' || '"."' || r.table_name || '" (LIKE "pos"."' || r.table_name || '" INCLUDING ALL)'; 
             END LOOP; 
           END $$;
-        `;
+        `);
 
         // دحرجة تصنيفات المصاريف الافتراضية للسكيما الجديدة
-        await sqlCentral`
-          INSERT INTO "${sqlCentral(schemaName)}".expense_categories (name)
+        await sqlCentral.unsafe(`
+          INSERT INTO "${schemaName}".expense_categories (name)
           VALUES ('رواتب'), ('إيجار'), ('مرافق'), ('مواصلات'), ('صيانة'), ('مشتريات مكتبية'), ('تسويق'), ('أخرى')
           ON CONFLICT DO NOTHING
-        `;
+        `);
 
         // 5. توليد التوكن وإعادة البيانات
         const token = generateToken(userId, email, 'user', schemaName);
@@ -129,7 +130,7 @@ async function handleRequest(req) {
         return jsonResponse({ 
           success: true, 
           data: { user: { id: userId, email, full_name, company_name, role: 'user', is_active: true, schema_name: schemaName }, token }, 
-          message: 'تم إنشاء الحساب وتهيئة السكيما الخاصة بك بنجاح' 
+          message: 'تم إنشاء الحساب وتهيئة السكيما بنجاح' 
         }, 201);
       }
 
