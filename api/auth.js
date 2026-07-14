@@ -11,16 +11,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info',
 };
 
-// دالة لتنظيف وتحويل الاسم لاسم سكيما مستقل وصالح وآمن تماماً لـ Postgres
-function generateSchemaName(fullName) {
-  if (!fullName) return 'tenant_' + crypto.randomUUID().split('-')[0];
+// دالة لتنظيف وتحويل البريد الإلكتروني إلى اسم سكيما صالح وآمن تماماً لـ Postgres
+function generateSchemaNameFromEmail(email) {
+  if (!email) return 'tenant_' + crypto.randomUUID().split('-')[0];
   
-  let safeName = fullName
+  // نأخذ الجزء قبل علامة @ ونقوم بتنظيفه
+  const localPart = email.split('@')[0];
+  let safeName = localPart
     .trim()
     .toLowerCase()
-    // استبعاد أي رموز غريبة أو حركات خبيثة لضمان أمان النص تماماً ضد SQL Injection
-    .replace(/[^a-z0-9_]/g, '_') 
-    .replace(/^[^a-z_]/, '_');   
+    .replace(/[^a-z0-9_]/g, '_') // الاحتفاظ بالحروف الإنجليزية والأرقام والشرطة السفلية فقط
+    .replace(/^[^a-z_]/, '_');   // يجب أن تبدأ السكيما بحرف أو شرطة سفلية
     
   return safeName || 'tenant_' + crypto.randomUUID().split('-')[0];
 }
@@ -93,8 +94,8 @@ async function handleRequest(req) {
         const userId = crypto.randomUUID(); 
         const passwordHash = await hashPassword(password);
         
-        // 2. توليد اسم السكيما المُنظّف
-        const schemaName = generateSchemaName(full_name || email.split('@')[0]);
+        // 2. توليد اسم السكيما المستند إلى البريد الإلكتروني بشكل آمن
+        const schemaName = generateSchemaNameFromEmail(email);
 
         // 3. إنشاء السجل في الجدول المركزي
         await sqlCentral`
@@ -102,11 +103,12 @@ async function handleRequest(req) {
           VALUES (${userId}, ${email}, ${passwordHash}, ${schemaName})
         `;
 
-        // 4. الحل الفعّال والآمن: تمرير اسم السكيما المُطهر كنص مباشر غير مُعامل (Unparameterized) لمنع الخطأ
-        await sqlCentral.unsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+        // 4. إنشاء السكيما واستنساخ الجداول باستخدام دالة الاستعلام الافتراضية
+        // نقوم بصياغة الاستعلام كـ String مُطهّر ومحمي تماماً بفضل دالة التنظيف
+        await sqlCentral(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
         
-        // استنساخ الجداول من سكيما pos النموذجية إلى سكيما العميل الجديدة بشكل ديناميكي آمن
-        await sqlCentral.unsafe(`
+        // استنساخ الجداول من السكيما pos إلى السكيما الجديدة المستندة إلى الإيميل
+        await sqlCentral(`
           DO $$ 
           DECLARE 
             r RECORD; 
@@ -117,14 +119,14 @@ async function handleRequest(req) {
           END $$;
         `);
 
-        // دحرجة تصنيفات المصاريف الافتراضية للسكيما الجديدة
-        await sqlCentral.unsafe(`
+        // إضافة تصنيفات المصاريف الافتراضية للسكيما الجديدة
+        await sqlCentral(`
           INSERT INTO "${schemaName}".expense_categories (name)
           VALUES ('رواتب'), ('إيجار'), ('مرافق'), ('مواصلات'), ('صيانة'), ('مشتريات مكتبية'), ('تسويق'), ('أخرى')
-          ON CONFLICT DO NOTHING
+          ON CONFLICT (name) DO NOTHING
         `);
 
-        // 5. توليد التوكن وإعادة البيانات
+        // 5. توليد التوكن وإعادة البيانات للواجهة
         const token = generateToken(userId, email, 'user', schemaName);
         
         return jsonResponse({ 
