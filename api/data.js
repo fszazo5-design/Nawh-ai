@@ -675,4 +675,4 @@ async function handleRequest(req) {
   }
 }
 
-export { handleRequest };
+expoexport default handleRequest; //  الآن سيعمل دون أي مشاكل
