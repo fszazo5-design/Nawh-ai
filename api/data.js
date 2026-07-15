@@ -671,7 +671,7 @@ async function handleRequest(req) {
     return jsonResponse({ success: false, error: 'BAD_REQUEST', message: 'الجدول المطلوب غير مدعوم في النظام حالياً' }, 400);
 
   } catch (globalError) {
-    return jsonResponse({ success: false, error: 'SERVER_CRASH', message: globalError.message }, 500);
+    return jsonResponse({ success: false, error: 'SERVER_ERROR', message: globalError.message }, 500);
   }
 }
 
