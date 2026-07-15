@@ -1,13 +1,13 @@
 /**
  * Inventory Management Page
  * =-=-=-=-=-=-=-=-=-=-=-=-=
- * صفحة إدارة المخزون مع تنبيهات الحد الأدنى
+ * صفحة إدارة المخزون مع تنبيهات الحد الأدنى وسجل حركات المخزن الشامل
  */
 
 import { useState, useEffect } from 'react';
 import {
   Package, AlertTriangle, Search, Plus, Edit, RefreshCw,
-  TrendingDown, TrendingUp, BarChart3, History
+  TrendingDown, TrendingUp, BarChart3, History, FileText, ShoppingBag
 } from 'lucide-react';
 import { useDatabase } from '../../context/DatabaseContext.jsx';
 import LoadingSpinner from '../../components/ui/LoadingSpinner.jsx';
@@ -20,7 +20,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('');
   const [productsList, setProductsList] = useState([]);
   const [lowStockProducts, setLowStockProducts] = useState([]);
-  const [adjustments, setAdjustments] = useState([]);
+  const [transactions, setTransactions] = useState([]); // تم تغيير المسمى من adjustments إلى transactions ليطابق السجل العام
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [adjustData, setAdjustData] = useState({ qty: 0, reason: '' });
@@ -41,11 +41,14 @@ export default function InventoryPage() {
       const lowStock = await products.getLowStock();
       setLowStockProducts(lowStock);
 
-      // Load recent adjustments
-      const adjustmentsData = await query(
-        `SELECT * FROM inventory_adjustments ORDER BY created_at DESC LIMIT 20`
+      // جلب سجل الحركات الكامل للمخزن شامل المبيعات والمشتريات والتسويات اليدوية من جدول inventory_transactions
+      const transactionsData = await query(
+        `SELECT t.*, p.name as product_name 
+         FROM inventory_transactions t 
+         LEFT JOIN products p ON t.product_id = p.id 
+         ORDER BY t.created_at DESC LIMIT 50`
       );
-      setAdjustments(adjustmentsData);
+      setTransactions(transactionsData || []);
     } catch (err) {
       console.error('Error loading inventory:', err);
     } finally {
@@ -80,13 +83,41 @@ export default function InventoryPage() {
       )
     : productsList;
 
+  // دالة مساعدة لتصنيف وتلوين نوع الحركة (مبيعات، مشتريات، تسوية)
+  const getTransactionBadge = (type) => {
+    switch (type) {
+      case 'SALE':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 border border-red-100 text-red-700 text-xs rounded-full">
+            <FileText size={12} />
+            فاتورة بيع
+          </span>
+        );
+      case 'PURCHASE':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs rounded-full">
+            <ShoppingBag size={12} />
+            فاتورة شراء
+          </span>
+        );
+      case 'ADJUSTMENT':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 border border-blue-100 text-blue-700 text-xs rounded-full">
+            <RefreshCw size={12} />
+            تسوية يدوية
+          </span>
+        );
+    }
+  };
+
   return (
     <div className="p-6 space-y-6" dir="rtl">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">إدارة المخزون</h1>
-          <p className="text-slate-500 text-sm mt-1">مراقبة وتسوية المخزون</p>
+          <p className="text-slate-500 text-sm mt-1">مراقبة وتسوية المخزون وحركات المنتجات التلقائية واليدوية</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -124,9 +155,9 @@ export default function InventoryPage() {
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-slate-500 text-sm">نواقص اليوم</p>
+              <p className="text-slate-500 text-sm">الصادرات من المخزن (اليوم)</p>
               <p className="text-2xl font-bold text-red-600 mt-1">
-                {adjustments.filter(a => a.adjustment_qty < 0).length}
+                {transactions.filter(t => parseFloat(t.qty) < 0).length} حركة
               </p>
             </div>
             <TrendingDown className="text-red-500" size={24} />
@@ -136,9 +167,9 @@ export default function InventoryPage() {
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-slate-500 text-sm">زيادات اليوم</p>
+              <p className="text-slate-500 text-sm">الوارد للمخزن (اليوم)</p>
               <p className="text-2xl font-bold text-emerald-600 mt-1">
-                {adjustments.filter(a => a.adjustment_qty > 0).length}
+                {transactions.filter(t => parseFloat(t.qty) > 0).length} حركة
               </p>
             </div>
             <TrendingUp className="text-emerald-500" size={24} />
@@ -179,7 +210,7 @@ export default function InventoryPage() {
           }`}
         >
           <History size={16} className="inline ml-1" />
-          سجل التسويات
+          سجل حركات المخازن (التفصيلي)
         </button>
       </div>
 
@@ -215,10 +246,10 @@ export default function InventoryPage() {
                       <th className="px-4 py-3 text-right font-medium">الفئة</th>
                       <th className="px-4 py-3 text-right font-medium">سعر التكلفة</th>
                       <th className="px-4 py-3 text-right font-medium">سعر البيع</th>
-                      <th className="px-4 py-3 text-right font-medium">الكمية</th>
+                      <th className="px-4 py-3 text-right font-medium">الكمية الحالية</th>
                       <th className="px-4 py-3 text-right font-medium">الحد الأدنى</th>
                       <th className="px-4 py-3 text-right font-medium">الحالة</th>
-                      <th className="px-4 py-3 text-center font-medium">إجراءات</th>
+                      <th className="px-4 py-3 text-center font-medium">تسوية يدوية</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -251,10 +282,11 @@ export default function InventoryPage() {
                               setSelectedProduct(product);
                               setShowAdjustModal(true);
                             }}
-                            className="p-2 hover:bg-blue-50 rounded-lg text-blue-600 transition-colors"
+                            className="p-2 hover:bg-blue-50 rounded-lg text-blue-600 transition-colors inline-flex items-center gap-1 text-xs"
                             title="تسوية الكمية"
                           >
-                            <RefreshCw size={16} />
+                            <RefreshCw size={14} />
+                            تسوية الكمية
                           </button>
                         </td>
                       </tr>
@@ -282,7 +314,7 @@ export default function InventoryPage() {
                         <h4 className="font-medium text-slate-800">{product.name}</h4>
                         <p className="text-sm text-slate-500">
                           الكمية الحالية: <span className="text-amber-700 font-medium">{product.stock_qty}</span>
-                          {product.min_stock_qty > 0 && ` - يجب لا تقل عن ${product.min_stock_qty}`}
+                          {product.min_stock_qty > 0 && ` - يجب ألا تقل عن ${product.min_stock_qty}`}
                         </p>
                       </div>
                     </div>
@@ -293,7 +325,7 @@ export default function InventoryPage() {
                       }}
                       className="px-3 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 transition-colors"
                     >
-                      طلب توريد
+                      طلب توريد وتعديل مخزني
                     </button>
                   </div>
                 ))
@@ -301,37 +333,53 @@ export default function InventoryPage() {
             </div>
           )}
 
-          {/* History Tab */}
+          {/* History Tab (سجل حركة المخزن الكامل) */}
           {activeTab === 'history' && (
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-slate-50 text-slate-600 text-sm">
-                  <tr>
-                    <th className="px-4 py-3 text-right font-medium">التاريخ</th>
-                    <th className="px-4 py-3 text-right font-medium">المنتج</th>
-                    <th className="px-4 py-3 text-right font-medium">السابقة</th>
-                    <th className="px-4 py-3 text-right font-medium">الجديدة</th>
-                    <th className="px-4 py-3 text-right font-medium">التغيير</th>
-                    <th className="px-4 py-3 text-right font-medium">السبب</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {adjustments.map(adj => (
-                    <tr key={adj.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-3 text-slate-600 text-sm">
-                        {new Date(adj.created_at).toLocaleString('ar-SA')}
-                      </td>
-                      <td className="px-4 py-3 text-slate-800">{adj.product_name}</td>
-                      <td className="px-4 py-3 text-slate-600">{adj.previous_qty}</td>
-                      <td className="px-4 py-3 text-slate-800 font-medium">{adj.new_qty}</td>
-                      <td className={`px-4 py-3 font-medium ${adj.adjustment_qty < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                        {adj.adjustment_qty > 0 ? '+' : ''}{adj.adjustment_qty}
-                      </td>
-                      <td className="px-4 py-3 text-slate-500">{adj.reason || '-'}</td>
+              <div className="p-4 bg-slate-50 border-b border-slate-200">
+                <h3 className="text-sm font-semibold text-slate-700">تتبع الحركات التلقائية واليدوية</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-slate-50 text-slate-600 text-sm">
+                    <tr>
+                      <th className="px-4 py-3 text-right font-medium">التاريخ والوقت</th>
+                      <th className="px-4 py-3 text-right font-medium">المنتج</th>
+                      <th className="px-4 py-3 text-right font-medium">نوع الحركة</th>
+                      <th className="px-4 py-3 text-right font-medium">الكمية السابقة</th>
+                      <th className="px-4 py-3 text-right font-medium">الكمية المتأثرة</th>
+                      <th className="px-4 py-3 text-right font-medium">الكمية الجديدة</th>
+                      <th className="px-4 py-3 text-right font-medium">السبب / الملاحظات</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {transactions.length === 0 ? (
+                      <tr>
+                        <td colSpan="7" className="text-center py-8 text-slate-400 text-sm">لا توجد حركات مخزنية مسجلة حتى الآن</td>
+                      </tr>
+                    ) : (
+                      transactions.map(trans => {
+                        const isReduction = parseFloat(trans.qty) < 0;
+                        return (
+                          <tr key={trans.id} className="hover:bg-slate-50 text-sm">
+                            <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
+                              {new Date(trans.created_at).toLocaleString('ar-SA')}
+                            </td>
+                            <td className="px-4 py-3 text-slate-800 font-medium">{trans.product_name || 'منتج غير معروف'}</td>
+                            <td className="px-4 py-3">{getTransactionBadge(trans.transaction_type)}</td>
+                            <td className="px-4 py-3 text-slate-500">{trans.old_qty ?? '-'}</td>
+                            <td className={`px-4 py-3 font-semibold ${isReduction ? 'text-red-600' : 'text-emerald-600'}`}>
+                              {parseFloat(trans.qty) > 0 ? '+' : ''}{trans.qty}
+                            </td>
+                            <td className="px-4 py-3 text-slate-800 font-medium">{trans.new_qty ?? '-'}</td>
+                            <td className="px-4 py-3 text-slate-500 max-w-xs truncate">{trans.notes || trans.reason || '-'}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>
@@ -341,7 +389,7 @@ export default function InventoryPage() {
       {showAdjustModal && selectedProduct && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-md mx-4">
-            <h3 className="text-lg font-bold text-slate-800 mb-4">تسوية الكمية</h3>
+            <h3 className="text-lg font-bold text-slate-800 mb-4">تسوية الكمية يدوياً</h3>
 
             <div className="space-y-4">
               <div className="p-3 bg-slate-50 rounded-lg">
@@ -358,7 +406,8 @@ export default function InventoryPage() {
                   type="number"
                   value={adjustData.qty}
                   onChange={(e) => setAdjustData(prev => ({ ...prev, qty: parseFloat(e.target.value) || 0 }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 text-left"
+                  dir="ltr"
                   placeholder="أدخل الكمية"
                 />
               </div>
@@ -378,7 +427,7 @@ export default function InventoryPage() {
 
               <div className="p-3 bg-blue-50 rounded-lg">
                 <p className="text-sm text-slate-600">
-                  الكمية بعد التسوية:
+                  الكمية المتوقعة بعد التسوية:
                   <span className="font-bold text-blue-700 ms-2">
                     {selectedProduct.stock_qty + adjustData.qty}
                   </span>
