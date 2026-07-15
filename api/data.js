@@ -1,7 +1,7 @@
 import { getDb, initializeDatabase } from './_db.js';
 
 /**
- * Data API Endpoint (Vercel Web Fetch API Style)
+ * Data API Endpoint (Vercel App Router Route Handlers Style)
  * Unified API for POS database operations with dynamic Schema switching.
  */
 
@@ -42,6 +42,7 @@ function generatePurchaseNumber() {
   return `PO-${date}-${random}`;
 }
 
+// دالة المعالجة المركزية لطلبات الـ API المتنوعة
 async function handleRequest(req) {
   const host = typeof req.headers.get === 'function' ? req.headers.get('host') : (req.headers?.host || 'localhost');
   const authHeader = typeof req.headers.get === 'function' ? req.headers.get('authorization') : (req.headers?.authorization);
@@ -66,7 +67,7 @@ async function handleRequest(req) {
       }
     }
 
-    // تحديد اسم السكيما المستهدفة (الافتراضية هي "pos" كما تم تحديدها في ملف الـ SQL الخاص بك)
+    // تحديد اسم السكيما المستهدفة
     const targetSchema = user?.schemaName || clientSchemaHeader || 'pos';
     const safeSchemaName = targetSchema.replace(/[^a-zA-Z0-9_]/g, '');
     const sql = getDb(safeSchemaName);
@@ -272,7 +273,6 @@ async function handleRequest(req) {
           const result = await schema`SELECT i.*, c.name as customer_name FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id WHERE i.id = ${id}`;
           if (result.length === 0) return jsonResponse({ success: false, error: 'NOT_FOUND' }, 404);
           
-          // جلب بنود الفاتورة المحددة تلقائياً
           const items = await schema`SELECT * FROM invoice_items WHERE invoice_id = ${id} ORDER BY created_at ASC`;
           const invoiceDetails = { ...result[0], items };
           
@@ -287,7 +287,6 @@ async function handleRequest(req) {
           const invoice_number = body.invoice_number || generateInvoiceNumber();
           const invId = crypto.randomUUID();
           
-          // إدخال الفاتورة (الـ triggers بالسكيما ستتولى أمر التدفق المالي وحساب رصيد العميل الآجل تلقائياً)
           const invoiceResult = await schema`
             INSERT INTO invoices (id, invoice_number, customer_id, status, subtotal, discount_amt, tax_rate, tax_amt, total_amount, paid_amount, payment_method, notes)
             VALUES (${invId}, ${invoice_number}, ${body.customer_id || null}, ${body.status || 'paid'}, ${body.subtotal || 0}, ${body.discount_amt || 0}, ${body.tax_rate || 0}, ${body.tax_amt || 0}, ${body.total_amount || 0}, ${body.paid_amount || 0}, ${body.payment_method || 'cash'}, ${body.notes || null}) 
@@ -295,7 +294,6 @@ async function handleRequest(req) {
           `;
           const invoice = invoiceResult[0];
 
-          // إدخال بنود الفاتورة (الـ trigger trg_inventory_sale_item_all سيتولى إنقاص المخزن وتوثيق الحركة تلقائياً)
           if (body.items && body.items.length > 0) {
             for (const item of body.items) {
               const itemId = crypto.randomUUID();
@@ -313,7 +311,6 @@ async function handleRequest(req) {
 
       if (req.method === 'PUT' && id) {
         try {
-          // تحديث رأس الفاتورة
           const result = await schema`
             UPDATE invoices SET
               customer_id = COALESCE(${body.customer_id ?? null}, customer_id),
@@ -329,7 +326,6 @@ async function handleRequest(req) {
             WHERE id = ${id} RETURNING *
           `;
 
-          // إذا تم إرسال بنود جديدة للـ Update، يتم حذف القديمة وإدراج الجديدة لضمان سلامة التحديث
           if (body.items && body.items.length > 0) {
             await schema`DELETE FROM invoice_items WHERE invoice_id = ${id}`;
             for (const item of body.items) {
@@ -349,7 +345,6 @@ async function handleRequest(req) {
 
       if (req.method === 'DELETE' && id) {
         try {
-          // تريجرات قاعدة البيانات ستقوم برد البضائع للمخازن، وإلغاء حركات الخزينة والعملاء تلقائياً بمجرد مسح رأس الفاتورة
           await schema`DELETE FROM invoices WHERE id = ${id}`;
           return jsonResponse({ success: true, message: 'تم حذف الفاتورة وعكس كافة التأثيرات المالية والمخزنية بنجاح' });
         } catch (err) {
@@ -485,7 +480,6 @@ async function handleRequest(req) {
             RETURNING *
           `;
           
-          // إدراج حركة صرف الصندوق النقدي
           const cfId = crypto.randomUUID();
           await schema`
             INSERT INTO cash_flow (id, type, amount, source_type, reference_id, description)
@@ -667,7 +661,6 @@ async function handleRequest(req) {
       }
     }
 
-    // في حال عدم مطابقة أي جدول
     return jsonResponse({ success: false, error: 'BAD_REQUEST', message: 'الجدول المطلوب غير مدعوم في النظام حالياً' }, 400);
 
   } catch (globalError) {
@@ -675,4 +668,29 @@ async function handleRequest(req) {
   }
 }
 
-expoexport default handleRequest; //  الآن سيعمل دون أي مشاكل
+// ===================================================
+// === [ Vercel / Next.js Named Exports handlers ] ===
+// ===================================================
+
+export async function GET(request) {
+  return handleRequest(request);
+}
+
+export async function POST(request) {
+  return handleRequest(request);
+}
+
+export async function PUT(request) {
+  return handleRequest(request);
+}
+
+export async function DELETE(request) {
+  return handleRequest(request);
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders
+  });
+}
