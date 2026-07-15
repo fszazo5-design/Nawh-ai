@@ -58,7 +58,7 @@ async function handleRequest(req) {
   try {
     // 1. معالجة تهيئة السكيما وزرع جداولها وأنظمتها التلقائية
     if (action === 'init-db' || table === 'init-db') {
-      const schemaToInit = user?.schemaName || clientSchemaHeader || url.searchParams.get('schema') || 'pos';
+      const schemaToInit = user?.schemaName || clientSchemaHeader || url.searchParams.get('schema') || 'public';
       try {
         const result = await initializeDatabase(schemaToInit);
         return jsonResponse(result);
@@ -67,12 +67,12 @@ async function handleRequest(req) {
       }
     }
 
-    // تحديد اسم السكيما المستهدفة
-    const targetSchema = user?.schemaName || clientSchemaHeader || 'pos';
-    const safeSchemaName = targetSchema.replace(/[^a-zA-Z0-9_]/g, '');
+    // تحديد السكيما المستهدفة لتكون السكيما العامة دائماً "public"
+    const targetSchema = 'public';
+    const safeSchemaName = targetSchema;
     const sql = getDb(safeSchemaName);
 
-    // محرك تحويل السكيما الديناميكي لمنع مشاكل الـ JOINs والـ UPDATE والـ INSERT
+    // محرك تحويل السكيما الديناميكي ليوجه الاستعلامات دائماً إلى السكيما العامة public
     const schema = (strings, ...values) => {
       const newStrings = strings.map(str => {
         return str.replace(
